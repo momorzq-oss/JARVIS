@@ -14,33 +14,45 @@ import sys
 
 
 _INSTANCE_MUTEX = None
+_ACTIVATION_EVENT = None
+
+_INSTANCE_MUTEX_NAME = "Local\\JARVISDesktopAssistant"
+_ACTIVATION_EVENT_NAME = "Local\\JARVISDesktopAssistantActivate"
 
 
 def _activate_existing_window():
-    """Best-effort focus for the live JARVIS window on a repeated launch."""
+    """Ask the live Qt process to restore its own window.
+
+    Showing a tray-hidden QWidget through ``ShowWindow`` alone leaves Qt's
+    internal visibility state out of sync with Windows.  On some systems that
+    produces a title bar with a blank white client area.  A named event lets
+    the existing GUI call ``showNormal`` on its own GUI thread instead.
+    """
     if os.name != "nt":
         return
     try:
         import ctypes
 
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
-        user32.FindWindowW.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p)
-        user32.FindWindowW.restype = ctypes.c_void_p
-        user32.ShowWindowAsync.argtypes = (ctypes.c_void_p, ctypes.c_int)
-        user32.ShowWindowAsync.restype = ctypes.c_bool
-        user32.SetForegroundWindow.argtypes = (ctypes.c_void_p,)
-        user32.SetForegroundWindow.restype = ctypes.c_bool
-        hwnd = user32.FindWindowW(None, "JARVIS · Desktop Intelligence System")
-        if hwnd:
-            user32.ShowWindowAsync(hwnd, 9)  # SW_RESTORE
-            user32.SetForegroundWindow(hwnd)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenEventW.argtypes = (
+            ctypes.c_uint32, ctypes.c_bool, ctypes.c_wchar_p,
+        )
+        kernel32.OpenEventW.restype = ctypes.c_void_p
+        kernel32.SetEvent.argtypes = (ctypes.c_void_p,)
+        kernel32.SetEvent.restype = ctypes.c_bool
+        kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+        kernel32.CloseHandle.restype = ctypes.c_bool
+        event = kernel32.OpenEventW(0x0002, False, _ACTIVATION_EVENT_NAME)
+        if event:
+            kernel32.SetEvent(event)
+            kernel32.CloseHandle(event)
     except Exception:
         pass
 
 
 def _acquire_single_instance():
     """Allow only one GUI process, including when its window is in the tray."""
-    global _INSTANCE_MUTEX
+    global _INSTANCE_MUTEX, _ACTIVATION_EVENT
     if os.name != "nt":
         return True
     try:
@@ -54,7 +66,7 @@ def _acquire_single_instance():
         kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
         kernel32.CloseHandle.restype = ctypes.c_bool
         ctypes.set_last_error(0)
-        handle = kernel32.CreateMutexW(None, False, "Local\\JARVISDesktopAssistant")
+        handle = kernel32.CreateMutexW(None, False, _INSTANCE_MUTEX_NAME)
         if not handle:
             return True  # Do not make a Windows API diagnostic prevent startup.
         if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
@@ -62,9 +74,31 @@ def _acquire_single_instance():
             _activate_existing_window()
             return False
         _INSTANCE_MUTEX = handle  # retain the mutex for the process lifetime
+        kernel32.CreateEventW.argtypes = (
+            ctypes.c_void_p, ctypes.c_bool, ctypes.c_bool, ctypes.c_wchar_p,
+        )
+        kernel32.CreateEventW.restype = ctypes.c_void_p
+        _ACTIVATION_EVENT = kernel32.CreateEventW(
+            None, False, False, _ACTIVATION_EVENT_NAME,
+        )
     except Exception:
         return True
     return True
+
+
+def _consume_activation_request():
+    """Return whether another launcher requested a Qt-owned window restore."""
+    if os.name != "nt" or not _ACTIVATION_EVENT:
+        return False
+    try:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.WaitForSingleObject.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+        kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+        return kernel32.WaitForSingleObject(_ACTIVATION_EVENT, 0) == 0
+    except Exception:
+        return False
 
 
 def _attach_hidden_stdio(log_dir):
@@ -184,6 +218,15 @@ def main(argv=None):
 
     tray.openRequested.connect(show_window)
 
+    # A Desktop shortcut launch while JARVIS is minimized to the tray reaches
+    # this timer.  Restore through Qt, never via a raw Win32 ShowWindow call.
+    activation_timer = QTimer(app)
+    activation_timer.setInterval(200)
+    activation_timer.timeout.connect(
+        lambda: show_window() if _consume_activation_request() else None
+    )
+    activation_timer.start()
+
     # ---- voice / mute / logs from tray ---------------------------------------
     tray.startVoiceRequested.connect(window._on_start_voice)
     tray.stopVoiceRequested.connect(window._on_stop_voice)
@@ -252,6 +295,7 @@ def main(argv=None):
     window.closeEvent = close_event
 
     exit_code = app.exec()
+    activation_timer.stop()
     try:
         gui_controller.shutdown()
     except Exception:

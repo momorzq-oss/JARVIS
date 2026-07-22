@@ -19,6 +19,12 @@ from .hermes_protocol import parse_plan_json
 class HermesAdapterError(RuntimeError): pass
 
 
+def _background_process_kwargs():
+    """Hermes diagnostics are captured; they must never create a console."""
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    return {"creationflags": flags} if flags else {}
+
+
 class HermesAdapter:
     def __init__(self, enabled=None, mode=None, executable=None, timeout=None):
         self.enabled = Config.HERMES_ENABLED if enabled is None else bool(enabled)
@@ -57,7 +63,8 @@ class HermesAdapter:
             raise HermesAdapterError("unsupported Hermes diagnostic")
         try:
             result = subprocess.run([self._binary(), command], shell=False, capture_output=True,
-                                    text=True, timeout=self.timeout, check=False)
+                                    text=True, timeout=self.timeout, check=False,
+                                    **_background_process_kwargs())
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise HermesAdapterError(f"Hermes diagnostic failed: {exc}") from exc
         if result.returncode:
@@ -79,7 +86,7 @@ class HermesAdapter:
         try:
             result = subprocess.run(self._pilot_command(prompt), shell=False, capture_output=True,
                                     text=True, timeout=self.timeout, check=False,
-                                    cwd=str(Config.TEMP_DIR))
+                                    cwd=str(Config.TEMP_DIR), **_background_process_kwargs())
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise HermesAdapterError(f"Hermes planning failed: {exc}") from exc
         if result.returncode:

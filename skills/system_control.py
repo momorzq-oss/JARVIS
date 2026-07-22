@@ -72,6 +72,12 @@ START_MENU_DIRS = [
 SEARCH_DIRS = [Config.DESKTOP_PATH, Path.home() / "Documents"]
 
 
+def _background_process_kwargs():
+    """Hide only helper shells; explicitly requested terminals stay visible."""
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    return {"creationflags": flags} if flags else {}
+
+
 # ---------------------------------------------------------------------------
 # OPEN
 # ---------------------------------------------------------------------------
@@ -119,20 +125,22 @@ def _launch_app(name, ctx):
         if target.endswith(":"):                      # URI scheme (settings:, whatsapp:)
             os.startfile(target)
             return {"pid": None, "how": "uri"}
-        if target.endswith(".exe") and "\\" not in target:
-            proc = subprocess.Popen(
-                [target], shell=False,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            return {"pid": proc.pid, "how": "exe"}
+        if target.lower() in {"cmd.exe", "powershell.exe", "wt.exe"}:
+            proc = subprocess.Popen([target], shell=False)
+            return {"pid": proc.pid, "how": "interactive_terminal"}
         proc = subprocess.Popen(
-            target, shell=True,
+            [target], shell=False,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            **_background_process_kwargs(),
         )
-        return {"pid": proc.pid, "how": "shell"}
+        return {"pid": proc.pid, "how": "direct"}
     except Exception:
         try:
-            subprocess.Popen(f"start {target}", shell=True)
+            subprocess.Popen(
+                f"start \"\" \"{target}\"", shell=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                **_background_process_kwargs(),
+            )
             return {"pid": None, "how": "start"}
         except Exception:
             return None
@@ -215,7 +223,8 @@ def _launch_resolved(target, ctx):
                 pass
             proc = subprocess.Popen([target.value], shell=False,
                                     stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL)
+                                    stderr=subprocess.DEVNULL,
+                                    **_background_process_kwargs())
             time.sleep(0.25)
             if proc.poll() not in (None, 0):
                 return None

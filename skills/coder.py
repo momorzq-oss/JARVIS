@@ -16,6 +16,11 @@ from config import Config
 from brain.prompts import CODER_PROMPT
 
 
+def _background_process_kwargs():
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return {"creationflags": flags} if flags else {}
+
+
 def _slug(text):
     s = re.sub(r"[^\w\s-]", "", text.lower())[:40].strip()
     s = re.sub(r"[\s-]+", "_", s)
@@ -95,7 +100,8 @@ def build_app(description, ctx):
     # open in VS Code if present, else Explorer
     if shutil.which("code"):
         try:
-            subprocess.Popen(["code", "."], cwd=str(folder), shell=False)
+            subprocess.Popen(["code", "."], cwd=str(folder), shell=False,
+                             **_background_process_kwargs())
         except Exception:
             try:
                 import os

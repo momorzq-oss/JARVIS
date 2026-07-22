@@ -7,6 +7,12 @@ import subprocess
 from pathlib import Path
 
 
+def _background_process_kwargs():
+    """Runtime probes are hidden, captured maintenance commands."""
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    return {"creationflags": flags} if flags else {}
+
+
 class HermesRuntimeManager:
     """Discovery and read-only probes; JARVIS owns the user experience."""
     def __init__(self, home=None, timeout=20):
@@ -26,6 +32,7 @@ class HermesRuntimeManager:
             raise RuntimeError("Hermes is not installed")
         return subprocess.run([str(self.python), str(self.launcher), *args], shell=False,
             cwd=str(self.repo), text=True, capture_output=True, timeout=timeout or self.timeout,
+            **_background_process_kwargs(),
             check=False)
 
     def snapshot(self):
@@ -52,7 +59,8 @@ class HermesRuntimeManager:
             return []
         try:
             result = subprocess.run([str(self.python), "-c", code], shell=False, cwd=str(self.repo),
-                text=True, capture_output=True, timeout=self.timeout, check=False)
+                text=True, capture_output=True, timeout=self.timeout,
+                **_background_process_kwargs(), check=False)
             if result.returncode:
                 raise RuntimeError(result.stderr.strip())
             data = json.loads(result.stdout)

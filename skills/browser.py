@@ -16,6 +16,12 @@ from urllib.parse import quote_plus
 from config import Config
 
 
+def _background_process_kwargs():
+    """Prevent a console flash for non-interactive Playwright maintenance."""
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    return {"creationflags": flags} if flags else {}
+
+
 def _install_chromium():
     """Install Chromium only into JARVIS' permanent per-user browser store."""
     Config.PLAYWRIGHT_BROWSERS_DIR.mkdir(parents=True, exist_ok=True)
@@ -27,6 +33,7 @@ def _install_chromium():
             env=env,
             check=False,
             timeout=600,
+            **_background_process_kwargs(),
         ).returncode == 0
     from playwright._impl._driver import compute_driver_executable, get_driver_env
 
@@ -36,6 +43,7 @@ def _install_chromium():
         env={**get_driver_env(), **env},
         check=False,
         timeout=600,
+        **_background_process_kwargs(),
     ).returncode == 0
 
 

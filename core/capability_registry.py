@@ -292,7 +292,11 @@ class CapabilityRegistry:
 
     @staticmethod
     def _approved_operation_exists(skill, module_skill, operation):
-        if skill in ("windows", "task", "browser", "system"):
+        # These capability namespaces are implemented by the trusted adapter
+        # services attached to AssistantContext, not by a same-named module in
+        # ``skills``.  Treating them as imports made valid Office and website
+        # operations appear as fake "MISSING" capabilities.
+        if skill in ("windows", "task", "browser", "system", "office", "website"):
             return True
         try:
             module = importlib.import_module(f"skills.{module_skill}")

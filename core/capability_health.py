@@ -37,7 +37,13 @@ OPERATION_CONFIG_REQUIREMENTS = {
 LOGIN_REQUIREMENTS = {
     "emailer": "Google account login or SMTP configuration required",
     "gmail": "Google account login required",
-    "whatsapp": "WhatsApp Web login required",
+    "whatsapp": "WhatsApp Desktop login required",
+}
+
+LOGIN_ACCOUNTS = {
+    "emailer": "gmail",
+    "gmail": "gmail",
+    "whatsapp": "whatsapp",
 }
 
 OPTIONAL_DEPENDENCIES = {
@@ -90,6 +96,18 @@ class CapabilityHealth:
 
         login_detail = LOGIN_REQUIREMENTS.get(skill)
         if login_detail:
+            account = LOGIN_ACCOUNTS.get(skill)
+            if account:
+                try:
+                    from core.account_connections import AccountConnectionManager
+                    connection = AccountConnectionManager.status(account)
+                    if connection["connected"]:
+                        return HealthResult(
+                            WORKING,
+                            f"{account.title()} connection verified: {connection['detail']}",
+                        )
+                except Exception:
+                    pass
             return HealthResult(REQUIRES_LOGIN, login_detail)
 
         dependencies = OPTIONAL_DEPENDENCIES.get(skill, ())

@@ -86,7 +86,7 @@ Create a local `.env` file in the project root and add only the values you need:
 
 ```dotenv
 OPENROUTER_API_KEY=your_key_here
-OPENROUTER_MODEL=deepseek/deepseek-v4-flash
+OPENROUTER_MODEL=openai/gpt-oss-safeguard-20b
 ```
 
 SMTP/IMAP fallback may additionally use `EMAIL_ADDRESS` and `EMAIL_APP_PASSWORD`. Keep all real values local. JARVIS can run without OpenRouter, but cloud-backed features will be unavailable.
@@ -104,6 +104,10 @@ Start the complete GUI, including background model preloading:
 ```powershell
 python desktop_main.py
 ```
+
+On this Windows installation, double-click **`Launch JARVIS.vbs`** for the
+normal desktop launch. It starts the same GUI through a hidden console host,
+so a blank `py.exe` terminal cannot cover the JARVIS window.
 
 Useful development commands:
 

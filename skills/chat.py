@@ -6,6 +6,7 @@ Conversation & Memory — free discussion with short-term context
 import json
 import time
 from collections import deque
+from datetime import datetime
 
 from config import Config
 from brain.prompts import JARVIS_SYSTEM_PROMPT
@@ -65,8 +66,18 @@ def chat(message, remember_fact, ctx):
     if not message:
         return "Yes, sir?"
 
+    # Clock, date and a small set of conversational courtesies deliberately
+    # stay local.  They should remain available even if the OpenRouter model
+    # is offline or configured only for guarded planning.
+    local_reply = _local_conversation_reply(message, ctx)
+    if local_reply:
+        _remember_exchange(message, local_reply)
+        return local_reply
+
     if not ctx.llm.available:
-        return _offline_reply(message)
+        reply = _offline_reply(message)
+        _remember_exchange(message, reply)
+        return reply
 
     system = JARVIS_SYSTEM_PROMPT.format(
         address=Config.OWNER_ADDRESS, memory=_memory_block())
@@ -76,11 +87,56 @@ def chat(message, remember_fact, ctx):
 
     reply = ctx.llm.chat(messages, temperature=0.75, max_tokens=450)
     if not reply:
-        return _offline_reply(message)
+        reply = _offline_reply(message)
 
-    _history.append({"role": "user", "content": message})
-    _history.append({"role": "assistant", "content": reply})
+    _remember_exchange(message, reply)
     return reply
+
+
+def _remember_exchange(message, reply):
+    """Keep a bounded conversational context without writing chat text to disk."""
+    _history.append({"role": "user", "content": str(message)})
+    _history.append({"role": "assistant", "content": str(reply)})
+
+
+def _local_clock():
+    """Return the local Windows clock with its configured timezone label."""
+    now = datetime.now().astimezone()
+    zone = now.tzname() or "local time"
+    return now, zone
+
+
+def _format_clock_time(now):
+    """Format a 12-hour clock without platform-specific ``strftime`` flags."""
+    hour = now.hour % 12 or 12
+    return f"{hour}:{now.minute:02d} {'AM' if now.hour < 12 else 'PM'}"
+
+
+def _local_conversation_reply(message, ctx):
+    """Answer deterministic everyday conversation without a provider call."""
+    low = " ".join(str(message).lower().split()).strip(" .!?")
+    address = Config.OWNER_ADDRESS
+    time_phrases = (
+        "what time is it", "what is the time", "what's the time",
+        "tell me the time", "current time", "time please", "time now",
+        "can you tell me the time", "give me the time", "do you know the time",
+    )
+    date_phrases = (
+        "what is the date", "what's the date", "what day is it",
+        "what day is today", "tell me the date", "what is today",
+    )
+    if any(phrase in low for phrase in time_phrases):
+        now, zone = _local_clock()
+        return f"It is {_format_clock_time(now)} {zone}, {address}."
+    if any(phrase in low for phrase in date_phrases):
+        now, _ = _local_clock()
+        return f"Today is {now.strftime('%A, %d %B %Y')}, {address}."
+    if low in {"who are you", "what are you"}:
+        return f"I'm JARVIS, your desktop assistant, {address}."
+    if low in {"what can we talk about", "can we talk", "let's talk", "lets talk"}:
+        return (f"Of course, {address}. We can talk through ideas, plan work, "
+                "or simply have a conversation.")
+    return ""
 
 
 def _offline_reply(message):
@@ -117,7 +173,8 @@ def smalltalk(kind, ctx):
     if kind == "goodbye":
         return f"Very good, {a}. I'll be here when you need me."
     if kind == "time":
-        return f"It's {time.strftime('%H:%M')}, {a}."
+        now, zone = _local_clock()
+        return f"It is {_format_clock_time(now)} {zone}, {a}."
     if kind == "date":
         return f"Today is {time.strftime('%A, %d %B %Y')}, {a}."
     return f"Yes, {a}?"

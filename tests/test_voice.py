@@ -15,22 +15,16 @@ def test_skip_model_preload_flag():
     assert _parse_args(["--skip-model-preload"]).skip_model_preload is True
 
 
-def test_speaker_falls_back_to_piper(monkeypatch, tmp_path):
-    monkeypatch.setattr("voice.speaker.Config.EDGE_TTS_ENABLED", True)
+def test_speaker_synthesizes_with_piper_only(monkeypatch, tmp_path):
     speaker = Speaker.__new__(Speaker)
     speaker.last_engine = ""
-    speaker._stop = type("Stop", (), {"is_set": lambda self: False})()
 
-    paths = iter([tmp_path / "edge.mp3", tmp_path / "piper.wav"])
-    monkeypatch.setattr(speaker, "_temp_path", lambda suffix: Path(next(paths)))
-
-    async def fail_edge(text, path):
-        raise RuntimeError("HTTP 403")
+    piper_path = tmp_path / "piper.wav"
+    monkeypatch.setattr(speaker, "_temp_path", lambda suffix: piper_path)
 
     def synth_piper(text, path):
         path.write_bytes(b"RIFF" + b"0" * 64)
 
-    monkeypatch.setattr(speaker, "_synth_edge", fail_edge)
     monkeypatch.setattr(speaker, "_synth_piper", synth_piper)
 
     output = speaker._synthesize("hello")

@@ -1,15 +1,9 @@
-﻿"""
-Shared speech-output service.
+"""Shared Piper-only speech service with truthful GUI status reporting."""
+from __future__ import annotations
 
-Wraps the existing Speaker (Edge TTS -> Piper fallback -> pygame playback)
-and reports a real status to the GUI: unavailable / ready / speaking /
-muted / error. "Speaker OFF" is only ever shown when speech truly is
-unavailable - never merely because Edge TTS failed while Piper is fine.
-"""
 import threading
 
 from voice import audio_log
-from config import Config
 
 
 class SpeechOutputService:
@@ -19,7 +13,7 @@ class SpeechOutputService:
         self._muted = False
         self._lock = threading.RLock()
         self._speaker_state = "ready"
-        self._engine = "Piper Offline"
+        self._engine = "Piper"
         self._available = True
 
     def attach(self, speaker, state):
@@ -43,49 +37,53 @@ class SpeechOutputService:
 
     def speak(self, text, block=False):
         if self._muted:
-            audio_log.log("Speak suppressed (muted)")
+            audio_log.log("Piper speech suppressed (muted)")
             self._set(speaker_state="muted")
-            return
+            return False
         if self.speaker is None:
+            self._available = False
             self._set(speaker_state="unavailable", speaker_available=False)
-            return
+            return False
         self._set(speaker_state="speaking", speaker_available=True,
-                  speaker_engine=self._engine)
-        audio_log.log("Piper playback started")
+                  speaker_engine="Piper")
         try:
             self.speaker.speak(text, block=block)
         except Exception as exc:
             audio_log.log_error(f"Speech error: {exc}", exc)
-            self._set(speaker_state="error")
-            return
-        # return to ready shortly after queueing (Speaker is async)
-        engine = getattr(self.speaker, "last_engine", "") or self._engine
-        pretty = "Piper Offline" if "piper" in engine.lower() else "Edge TTS"
-        self._set(speaker_engine=pretty)
+            self._available = False
+            self._set(speaker_state="error", speaker_available=False,
+                      speaker_engine="Piper")
+            return False
+        self._available = True
+        audio_log.log("Piper playback queued")
+        self._set(speaker_engine="Piper")
         self._set(speaker_state="speaking" if self.speaker.speaking else "ready")
-        audio_log.log("Piper playback completed" if not self.speaker.speaking
-                      else "Piper playback queued")
+        return True
 
     def note_engine(self):
         if self.speaker is None:
             return
-        engine = getattr(self.speaker, "last_engine", "") or "piper"
-        pretty = "Piper Offline" if "piper" in engine.lower() else "Edge TTS"
-        if not Config.EDGE_TTS_ENABLED:
-            pretty = "Piper Offline"
-        self._set(speaker_engine=pretty, speaker_available=True,
+        self._set(speaker_engine="Piper", speaker_available=True,
                   speaker_state="ready" if not self._muted else "muted")
 
     def sync_state(self):
         if self.speaker is None:
+            self._available = False
             self._set(speaker_available=False, speaker_state="unavailable")
-            return
-        if self._muted:
+        elif self._muted:
             self._set(speaker_state="muted", speaker_available=True)
+        elif getattr(self.speaker, "last_error", ""):
+            self._available = False
+            self._set(speaker_state="error", speaker_available=False,
+                      speaker_engine="Piper")
         elif self.speaker.speaking:
-            self._set(speaker_state="speaking", speaker_available=True)
+            self._available = True
+            self._set(speaker_state="speaking", speaker_available=True,
+                      speaker_engine="Piper")
         else:
-            self._set(speaker_state="ready", speaker_available=True)
+            self._available = True
+            self._set(speaker_state="ready", speaker_available=True,
+                      speaker_engine="Piper")
 
     def mute(self):
         with self._lock:
@@ -113,4 +111,20 @@ class SpeechOutputService:
 
     def wait(self, timeout=None):
         if self.speaker is not None:
-            self.speaker.wait(timeout=timeout)
+            return self.speaker.wait(timeout=timeout)
+        return True
+
+    def set_output_device(self, device):
+        if self.speaker is None or not hasattr(self.speaker, "set_output_device"):
+            self._available = False
+            self._set(speaker_state="unavailable", speaker_available=False)
+            return False
+        try:
+            ok = bool(self.speaker.set_output_device(device))
+        except Exception as exc:
+            audio_log.log_error(f"Speaker device update failed: {exc}", exc)
+            ok = False
+        self._available = ok
+        self._set(speaker_state="ready" if ok else "error", speaker_available=ok,
+                  speaker_engine="Piper")
+        return ok

@@ -112,7 +112,7 @@ class SubsystemStatusBar(QScrollArea):
         ("Voice", "voice"),
         ("Wake Word", "wake"),
         ("Whisper", "whisper"),
-        ("DeepSeek V4 Flash", "kimi"),
+        ("OpenRouter Safety", "kimi"),
         ("Hermes", "hermes"),
         ("Desktop Agent", "desktop_agent"),
         ("Browser", "browser"),

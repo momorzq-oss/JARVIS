@@ -16,7 +16,7 @@ class VoiceState:
         self.selected_microphone = ""
         # speaker
         self.speaker_available = False
-        self.speaker_engine = ""        # "Edge TTS" | "Piper Offline" | ""
+        self.speaker_engine = ""        # "Piper" | ""
         self.speaker_state = "unavailable"  # unavailable|ready|speaking|muted|error
         # wake word
         self.wakeword_loaded = False

@@ -35,8 +35,13 @@ class SettingsWindow(QDialog):
         tabs = QTabWidget()
         tabs.addTab(self._audio_tab(), "Audio")
         tabs.addTab(self._assistant_tab(), "Assistant")
+        tabs.addTab(self._accounts_tab(), "Accounts")
+        tabs.addTab(self._hermes_tab(), "Hermes Engine")
         tabs.addTab(self._system_tab(), "System")
         root.addWidget(tabs)
+        bridge = getattr(self.gc, "bridge", None)
+        if bridge is not None and hasattr(bridge, "account_connection_changed"):
+            bridge.account_connection_changed.connect(self._on_account_connection)
 
         note = QLabel("The OpenRouter API key is kept in the environment and is never shown here.")
         note.setObjectName("statusLabel")
@@ -86,7 +91,6 @@ class SettingsWindow(QDialog):
         self._add_combo(form, "whisper_model", "Whisper model",
                         ["tiny", "base", "small", "medium", "large-v3"])
         self._add_line(form, "piper_voice", "Piper voice model")
-        self._add_check(form, "edge_tts_enabled", "Enable Edge TTS (online)")
         self._add_check(form, "start_voice_automatically", "Start voice automatically")
         return w
 
@@ -104,8 +108,6 @@ class SettingsWindow(QDialog):
                         ["ask", "research_folder"])
         self._add_combo(form, "confirmation_policy", "Confirmation policy",
                         ["risk_based", "always_confirm"])
-        self._add_check(form, "hermes_enabled", "Enable Hermes (not installed)")
-        self._widgets["hermes_enabled"][1].setEnabled(False)
         # Test Connection button
         self.btn_test_conn = QPushButton("Test Connection")
         self.btn_test_conn.clicked.connect(self._on_test_connection)
@@ -115,6 +117,122 @@ class SettingsWindow(QDialog):
         self.conn_result.setWordWrap(True)
         form.addRow(self.conn_result)
         return w
+
+    def _accounts_tab(self):
+        """Provider-owned sign-in flows; passwords and tokens never enter JARVIS."""
+        w = QWidget()
+        root = QVBoxLayout(w)
+        note = QLabel(
+            "Connect accounts in their official windows. JARVIS never asks for, "
+            "displays, or stores passwords, MFA codes, cookies, or OAuth tokens."
+        )
+        note.setObjectName("statusLabel")
+        note.setWordWrap(True)
+        root.addWidget(note)
+
+        gmail = QLabel("GMAIL / EMAIL")
+        gmail.setObjectName("dataValue")
+        root.addWidget(gmail)
+        self.gmail_status = QLabel(self._account_status_text("gmail"))
+        self.gmail_status.setWordWrap(True)
+        root.addWidget(self.gmail_status)
+        gmail_buttons = QHBoxLayout()
+        self.btn_connect_gmail = QPushButton("Open Google sign-in")
+        self.btn_connect_gmail.clicked.connect(lambda: self._begin_account_login("gmail"))
+        self.btn_verify_gmail = QPushButton("Verify Gmail")
+        self.btn_verify_gmail.clicked.connect(lambda: self._verify_account_login("gmail"))
+        gmail_buttons.addWidget(self.btn_connect_gmail)
+        gmail_buttons.addWidget(self.btn_verify_gmail)
+        root.addLayout(gmail_buttons)
+
+        whatsapp = QLabel("WHATSAPP DESKTOP")
+        whatsapp.setObjectName("dataValue")
+        root.addWidget(whatsapp)
+        self.whatsapp_status = QLabel(self._account_status_text("whatsapp"))
+        self.whatsapp_status.setWordWrap(True)
+        root.addWidget(self.whatsapp_status)
+        whatsapp_buttons = QHBoxLayout()
+        self.btn_connect_whatsapp = QPushButton("Open WhatsApp Desktop login")
+        self.btn_connect_whatsapp.clicked.connect(
+            lambda: self._begin_account_login("whatsapp")
+        )
+        self.btn_verify_whatsapp = QPushButton("Verify WhatsApp")
+        self.btn_verify_whatsapp.clicked.connect(
+            lambda: self._verify_account_login("whatsapp")
+        )
+        whatsapp_buttons.addWidget(self.btn_connect_whatsapp)
+        whatsapp_buttons.addWidget(self.btn_verify_whatsapp)
+        root.addLayout(whatsapp_buttons)
+        root.addStretch(1)
+        return w
+
+    @staticmethod
+    def _account_status_text(account):
+        try:
+            from core.account_connections import AccountConnectionManager
+            status = AccountConnectionManager.status(account)
+            return f"{status['state']}: {status['detail']}"
+        except Exception as exc:
+            return f"UNKNOWN: {exc}"
+
+    def _begin_account_login(self, account):
+        if self.gc is None or not hasattr(self.gc, "begin_account_login"):
+            self._set_account_status(account, "ERROR: Running JARVIS controller unavailable.")
+            return
+        self._set_account_status(account, "Opening official sign-in window…")
+        self.gc.begin_account_login(account)
+
+    def _verify_account_login(self, account):
+        if self.gc is None or not hasattr(self.gc, "verify_account_login"):
+            self._set_account_status(account, "ERROR: Running JARVIS controller unavailable.")
+            return
+        self._set_account_status(account, "Verifying the existing account session…")
+        self.gc.verify_account_login(account)
+
+    def _on_account_connection(self, account, result):
+        result = result if isinstance(result, dict) else {}
+        detail = result.get("detail", "No verification detail returned.")
+        state = result.get("state", "UNKNOWN")
+        self._set_account_status(str(account).lower(), f"{state}: {detail}")
+
+    def _set_account_status(self, account, text):
+        label = {
+            "gmail": getattr(self, "gmail_status", None),
+            "whatsapp": getattr(self, "whatsapp_status", None),
+        }.get(account)
+        if label is not None:
+            label.setText(str(text))
+
+    def _hermes_tab(self):
+        w = QWidget()
+        form = QFormLayout(w)
+        note = QLabel("Hermes runs as JARVIS's external agent engine. Provider secrets stay in Hermes's supported login/configuration flow and are never shown here.")
+        note.setWordWrap(True)
+        form.addRow(note)
+        self._add_check(form, "hermes_enabled", "Enable Hermes engine")
+        self._add_combo(form, "hermes_provider", "Provider", ["openrouter", "openai", "anthropic", "custom"])
+        self._add_line(form, "hermes_model", "Agent model")
+        self._add_combo(form, "hermes_mode", "Runtime mode", ["managed", "disabled"])
+        self._add_spin(form, "hermes_concurrency_limit", "Concurrent tasks", 1, 4, 1)
+        self._add_combo(form, "hermes_approval_mode", "Approval mode", ["strict", "balanced", "trusted_session"])
+        self._add_check(form, "hermes_background_enabled", "Enable background tasks")
+        self._add_check(form, "hermes_schedules_enabled", "Enable schedules")
+        self._add_check(form, "hermes_learning_enabled", "Enable generated-skill proposals")
+        self.hermes_status = QLabel("Checking installed Hermes runtime…")
+        self.hermes_status.setWordWrap(True)
+        form.addRow("RUNTIME", self.hermes_status)
+        self.btn_test_hermes = QPushButton("Test Hermes Runtime")
+        self.btn_test_hermes.clicked.connect(self._on_test_hermes)
+        form.addRow(self.btn_test_hermes)
+        return w
+
+    def _on_test_hermes(self):
+        try:
+            from brain.hermes_runtime_manager import HermesRuntimeManager
+            status = HermesRuntimeManager().snapshot()
+            self.hermes_status.setText(f"{status.get('state')}: {status.get('detail')}")
+        except Exception as exc:
+            self.hermes_status.setText(f"FAILED: {exc}")
 
     def _system_tab(self):
         w = QWidget()
@@ -341,4 +459,6 @@ class SettingsWindow(QDialog):
             else:
                 mapping[key] = w.text()
         self.store.update(mapping)
+        if self.gc is not None and hasattr(self.gc, "apply_settings"):
+            self.gc.apply_settings()
         self.accept()

@@ -84,6 +84,7 @@ class ControllerBridge(QObject):
     audit_event = Signal(str, str)
     emergency_stop_triggered = Signal()
     news_items_changed = Signal(object)
+    account_connection_changed = Signal(str, object)
 
 
 class _Task(QRunnable):
@@ -270,6 +271,7 @@ class GuiController(QObject):
         c.set_callback("agentstatus", self._forward_agentstatus)
         c.set_callback("capabilities", self._forward_capabilities)
         c.set_callback("taskstatus", self._forward_taskstatus)
+        c.set_callback("account_connection", self._forward_account_connection)
 
         # Set the confirmation handler for the DesktopAgent (called from worker thread)
         self.controller.agent.set_confirm_handler(self._confirmation_handler_from_agent)
@@ -391,6 +393,9 @@ class GuiController(QObject):
             self.bridge.task_failed.emit(snapshot)
         self._last_task_status = status
 
+    def _forward_account_connection(self, account, result):
+        self.bridge.account_connection_changed.emit(str(account), result)
+
     # ------------------------------------------------------------------ api
     def run_async(self, fn, *args, **kwargs):
         self.pool.start(_Task(fn, *args, **kwargs))
@@ -438,6 +443,15 @@ class GuiController(QObject):
 
     def speak(self, text):
         self.run_async(self.controller.speak, text)
+
+    def apply_settings(self):
+        return self.controller.apply_settings()
+
+    def begin_account_login(self, account):
+        self.run_async(self.controller.begin_account_login, account)
+
+    def verify_account_login(self, account):
+        self.run_async(self.controller.verify_account_login, account)
 
     def status_snapshot(self):
         return self.controller.status_snapshot()

@@ -278,8 +278,10 @@ class VoiceEngine:
         audio_log.log(
             f"Response returned: {len(spoken) if isinstance(spoken, str) else 0} characters"
         )
-        if spoken:
-            self.speech.speak(spoken)
+        # ``AssistantController.handle_text`` delegates normal commands to
+        # ``main.handle_utterance``, which owns normal response playback.
+        # Speaking ``spoken`` here as well played every voice-command response
+        # twice, with the two Piper jobs overlapping.
         if not self._stop.is_set():
             self.controller._set_state("listening_wake", "Listening for Hey Jarvis")
 

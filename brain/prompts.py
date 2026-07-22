@@ -47,7 +47,7 @@ Valid skills and their params:
 - research.finalize   {}
 - research.outline    {}
 - chat                {"message": "<the user's full message>"}
-- smalltalk           {"kind": "greeting|thanks|howareyou|goodbye"}
+- smalltalk           {"kind": "greeting|thanks|howareyou|goodbye|time|date"}
 
 Rules:
 - "open X" is app.open unless X is clearly a website ("open youtube.com") -> browser.open_site.

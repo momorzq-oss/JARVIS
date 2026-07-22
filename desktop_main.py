@@ -9,7 +9,76 @@ launched with --debug. Normal mode opens a graphical window with no console.
     python desktop_main.py --debug    # GUI + console diagnostics
 """
 import argparse
+import os
 import sys
+
+
+_INSTANCE_MUTEX = None
+
+
+def _activate_existing_window():
+    """Best-effort focus for the live JARVIS window on a repeated launch."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.FindWindowW.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p)
+        user32.FindWindowW.restype = ctypes.c_void_p
+        user32.ShowWindowAsync.argtypes = (ctypes.c_void_p, ctypes.c_int)
+        user32.ShowWindowAsync.restype = ctypes.c_bool
+        user32.SetForegroundWindow.argtypes = (ctypes.c_void_p,)
+        user32.SetForegroundWindow.restype = ctypes.c_bool
+        hwnd = user32.FindWindowW(None, "JARVIS · Desktop Intelligence System")
+        if hwnd:
+            user32.ShowWindowAsync(hwnd, 9)  # SW_RESTORE
+            user32.SetForegroundWindow(hwnd)
+    except Exception:
+        pass
+
+
+def _acquire_single_instance():
+    """Allow only one GUI process, including when its window is in the tray."""
+    global _INSTANCE_MUTEX
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.argtypes = (
+            ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p,
+        )
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+        kernel32.CloseHandle.restype = ctypes.c_bool
+        ctypes.set_last_error(0)
+        handle = kernel32.CreateMutexW(None, False, "Local\\JARVISDesktopAssistant")
+        if not handle:
+            return True  # Do not make a Windows API diagnostic prevent startup.
+        if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+            kernel32.CloseHandle(handle)
+            _activate_existing_window()
+            return False
+        _INSTANCE_MUTEX = handle  # retain the mutex for the process lifetime
+    except Exception:
+        return True
+    return True
+
+
+def _attach_hidden_stdio(log_dir):
+    """Give no-console launches a durable log sink instead of ``None`` streams.
+
+    WScript intentionally starts JARVIS with no terminal. Several optional
+    native libraries still write diagnostics to stdout/stderr; a real file
+    stream prevents those writes from terminating a worker or the process.
+    """
+    log_path = log_dir / "desktop_runtime.log"
+    if sys.stdout is None:
+        sys.stdout = open(log_path, "a", encoding="utf-8", buffering=1)
+    if sys.stderr is None:
+        sys.stderr = open(log_path, "a", encoding="utf-8", buffering=1)
 
 
 def _parse_args(argv=None):
@@ -27,10 +96,13 @@ def _parse_args(argv=None):
 def main(argv=None):
     args = _parse_args(argv)
 
+    if not _acquire_single_instance():
+        return 0
+
     from PySide6.QtCore import Qt, QTimer
     from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
-    from config import ensure_dirs
+    from config import Config, ensure_dirs
     from core.settings import SettingsStore
     from gui import styles
     from gui.workers import GuiController
@@ -39,6 +111,7 @@ def main(argv=None):
     from gui.tray import TrayIcon
 
     ensure_dirs()
+    _attach_hidden_stdio(Config.LOG_DIR)
 
     app = QApplication(sys.argv[:1])
     app.setApplicationName("JARVIS")

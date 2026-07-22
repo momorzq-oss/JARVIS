@@ -20,6 +20,11 @@ from voice.engine import VoiceEngine
 from core.desktop_agent import DesktopAgent
 from core.action_manager import Action, ActionManager
 from core.capability_registry import CapabilityRegistry
+from core.unified_tool_catalog import UnifiedToolCatalog
+from core.unified_tool_router import UnifiedToolRouter
+from brain.hermes_task_manager import HermesTaskManager
+from brain.hermes_health import hermes_health
+from core.account_connections import AccountConnectionManager
 
 STATE_IDLE = "idle"
 STATE_LOADING = "loading"
@@ -74,6 +79,10 @@ class AssistantController:
         self.ctx.assistant_controller = self
         self.ctx.action_manager = self.action_manager
         self.capability_registry = CapabilityRegistry(self)
+        self.unified_tool_catalog = UnifiedToolCatalog(self.capability_registry)
+        self.unified_tool_router = UnifiedToolRouter()
+        self.hermes_tasks = HermesTaskManager()
+        self.account_connections = AccountConnectionManager(self.ctx)
         live_task = getattr(self.ctx, "live_task", None)
         if live_task is not None:
             live_task._on_change = lambda snapshot: self._emit("taskstatus", snapshot)
@@ -103,6 +112,19 @@ class AssistantController:
     # ---------------------------------------------------------------- settings
     def attach_settings(self, settings_store):
         self._settings = settings_store
+        self.apply_settings()
+
+    def apply_settings(self):
+        """Apply runtime-safe settings without restarting JARVIS."""
+        if self._settings is None:
+            return False
+        try:
+            return bool(self.speech.set_output_device(
+                self._settings.get("speaker_device")
+            ))
+        except Exception as exc:
+            audio_log.log_error(f"Unable to apply speaker settings: {exc}", exc)
+            return False
 
     def _saved_mic(self):
         if self._settings is None:
@@ -116,6 +138,10 @@ class AssistantController:
 
     # ---------------------------------------------------------------- status
     def status_snapshot(self):
+        try:
+            self.speech.sync_state()
+        except Exception:
+            pass
         snap = self.state.snapshot()
         with self._lock:
             try:
@@ -130,8 +156,19 @@ class AssistantController:
             snap["current_task"] = self._current_task
             openrouter_ready = getattr(self.ctx.llm, "available", False)
             snap["openrouter"] = "ready" if openrouter_ready else "requires configuration"
+            snap["openrouter_model"] = Config.OPENROUTER_MODEL
+            # Retained as a compatibility key for existing GUI consumers.
             snap["kimi"] = snap["openrouter"]
-            snap["hermes"] = "disabled"
+            hermes = hermes_health()
+            snap["hermes"] = hermes["status"]
+            snap["hermes_detail"] = hermes["detail"]
+            hermes_tasks = [task.__dict__.copy() for task in self.hermes_tasks.list()]
+            snap["hermes_tasks"] = hermes_tasks
+            active_hermes = next((task for task in hermes_tasks if task["status"] not in {"COMPLETED", "FAILED", "CANCELLED"}), None)
+            snap["hermes_task"] = active_hermes["goal"] if active_hermes else "Unavailable"
+            snap["hermes_steps"] = (f"{active_hermes['current_step']}/{active_hermes['total_steps']}"
+                                     if active_hermes else "0/0")
+            snap["unified_tools"] = self.unified_tool_catalog.report()
             snap["browser"] = "open" if self._browser_open() else "closed"
             snap["desktop_agent"] = "ready"
             names = " ".join(
@@ -182,6 +219,18 @@ class AssistantController:
                 "error": str(exc), "capabilities": [],
             })
             return False
+
+    def begin_account_login(self, account):
+        result = self.account_connections.begin_login(account)
+        self._emit("account_connection", str(account), result)
+        self.start_capability_scan()
+        return result
+
+    def verify_account_login(self, account):
+        result = self.account_connections.verify(account)
+        self._emit("account_connection", str(account), result)
+        self.start_capability_scan()
+        return result
 
     def preload_models(self):
         if self.skip_preload:
@@ -304,6 +353,10 @@ class AssistantController:
             spoken = self._registry_command(cleaned)
             if spoken is None:
                 spoken = main_mod.handle_utterance(cleaned, self.ctx)
+            else:
+                # The normal utterance pipeline speaks its own responses.
+                # Registry commands bypass it, so play this one response here.
+                self.speak(spoken)
 
         except Exception as exc:
             if self.debug:
@@ -356,6 +409,10 @@ class AssistantController:
             live_task = getattr(self.ctx, "live_task", None)
             if live_task is not None:
                 live_task.cancel()
+        except Exception:
+            pass
+        try:
+            self.hermes_tasks.cancel_all()
         except Exception:
             pass
         self._emit("agentstatus", "Cancelled", "stopped by user")

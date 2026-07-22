@@ -289,7 +289,7 @@ class SettingsPage(QWidget):
         for label, key in (
             ("THEME", "theme"), ("MICROPHONE", "microphone_device"),
             ("SPEAKER", "speaker_device"), ("WHISPER", "whisper_model"),
-            ("PIPER", "piper_voice"), ("OPENROUTER / DEEPSEEK", "openrouter_model"),
+            ("PIPER", "piper_voice"), ("OPENROUTER", "openrouter_model"),
             ("HERMES", "hermes_enabled"), ("BROWSER", "browser_preference"),
             ("SAVE BEHAVIOR", "default_save_behavior"),
             ("CONFIRMATION", "confirmation_policy"), ("LOGS", "logs_folder"),

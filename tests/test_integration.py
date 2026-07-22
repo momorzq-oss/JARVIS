@@ -10,8 +10,8 @@ from config import Config
 
 
 # ---- OpenRouter model config ----------------------------------------------
-def test_openrouter_model_is_deepseek_v4_flash():
-    assert Config.OPENROUTER_MODEL == "deepseek/deepseek-v4-flash"
+def test_openrouter_model_is_gpt_oss_safeguard_20b():
+    assert Config.OPENROUTER_MODEL == "openai/gpt-oss-safeguard-20b"
 
 
 def test_openrouter_base_url():
@@ -23,14 +23,14 @@ def test_llm_test_connection_no_key(monkeypatch):
     monkeypatch.setattr(LLM, "available", property(lambda self: False))
     llm = LLM.__new__(LLM)
     llm.api_key = ""
-    llm.model = "deepseek/deepseek-v4-flash"
+    llm.model = "openai/gpt-oss-safeguard-20b"
     llm.base_url = Config.OPENROUTER_BASE_URL
     llm._client = None
     llm.last_error = ""
     llm._lock = __import__("threading").Lock()
     ok, model, detail = llm.test_connection()
     assert ok is False
-    assert model == "deepseek/deepseek-v4-flash"
+    assert model == "openai/gpt-oss-safeguard-20b"
     assert "not set" in detail.lower()
 
 
@@ -45,7 +45,7 @@ def test_llm_sanitizes_key_in_error(monkeypatch):
     monkeypatch.setattr(LLM, "available", property(lambda self: True))
     llm = LLM.__new__(LLM)
     llm.api_key = "sk-secret-123"
-    llm.model = "deepseek/deepseek-v4-flash"
+    llm.model = "openai/gpt-oss-safeguard-20b"
     llm.base_url = Config.OPENROUTER_BASE_URL
     llm.last_error = ""
     llm._lock = __import__("threading").Lock()

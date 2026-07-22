@@ -1,0 +1,26 @@
+capability_id,exposed_to_hermes,status,reason
+research.search_web,yes,pilot_only,structured plan only
+research.read_source,yes,pilot_only,structured plan only
+research.summarize_sources,yes,pilot_only,structured plan only
+news.fetch,yes,pilot_only,structured plan only
+browser.open_website,yes,pilot_only,structured plan only
+browser.search,yes,pilot_only,structured plan only
+browser.read_page,yes,pilot_only,structured plan only
+files.create_temp_folder,yes,pilot_only,approved temp locations only
+files.create_temp_file,yes,pilot_only,approved temp locations only
+files.read_temp_file,yes,pilot_only,approved temp locations only
+office_word.create_document,yes,pilot_only,confirmation and JARVIS execution required
+office_word.insert_text,yes,pilot_only,confirmation and JARVIS execution required
+office_word.apply_heading,yes,pilot_only,confirmation and JARVIS execution required
+office_word.save_document,yes,pilot_only,approved output location required
+windows.open_application,yes,pilot_only,JARVIS execution required
+windows.open_folder,yes,pilot_only,JARVIS execution required
+windows.focus_window,yes,pilot_only,JARVIS execution required
+task.pause,yes,pilot_only,JARVIS task control
+task.resume,yes,pilot_only,JARVIS task control
+task.cancel,yes,pilot_only,JARVIS task control
+speech.speak_summary,yes,pilot_only,Piper only
+arbitrary_shell,no,blocked,never exposed
+file_deletion,no,blocked,never exposed
+email_sending,no,blocked,never exposed
+input_automation,no,blocked,never exposed

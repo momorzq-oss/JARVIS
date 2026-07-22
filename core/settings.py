@@ -20,7 +20,6 @@ DEFAULTS = {
     "wake_threshold": Config.WAKE_THRESHOLD,
     "whisper_model": Config.WHISPER_MODEL,
     "piper_voice": str(Config.PIPER_MODEL),
-    "edge_tts_enabled": False,
     "openrouter_model": Config.OPENROUTER_MODEL,
     "browser_preference": "edge",
     "theme": "cinematic",
@@ -28,6 +27,14 @@ DEFAULTS = {
     "default_save_behavior": "ask",
     "confirmation_policy": "risk_based",
     "hermes_enabled": False,
+    "hermes_provider": "openrouter",
+    "hermes_model": "",
+    "hermes_mode": "managed",
+    "hermes_concurrency_limit": 2,
+    "hermes_approval_mode": "balanced",
+    "hermes_background_enabled": True,
+    "hermes_schedules_enabled": False,
+    "hermes_learning_enabled": False,
     "developer_mode": False,
     "start_voice_automatically": False,
     "start_with_windows": False,
@@ -56,6 +63,13 @@ class SettingsStore:
                         for key, value in raw.items():
                             if key in merged:
                                 merged[key] = value
+                        # Repair values left by an older packaged build.
+                        # This setting is display/configuration metadata; the
+                        # active source runtime always uses Config.PIPER_MODEL.
+                        # Do not leave the UI pointing to an old packaged copy.
+                        merged["piper_voice"] = str(Config.PIPER_MODEL)
+                        if merged.get("openrouter_model") == "moonshotai/kimi-k3":
+                            merged["openrouter_model"] = Config.OPENROUTER_MODEL
                         self._data = merged
             except Exception:
                 self._data = dict(DEFAULTS)

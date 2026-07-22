@@ -328,7 +328,7 @@ class MainWindow(QWidget):
             self.dashboard.reasoning.set_goal(text)
         elif stage in {"planned", "planner_step"}:
             self.dashboard.reasoning.set_planner(
-                "DeepSeek V4 Flash" if "deepseek" in text.lower() else "Backend planner"
+                "OpenRouter Safety" if "safeguard" in text.lower() else "Backend planner"
             )
             self.dashboard.reasoning.set_step(text)
         elif stage in {

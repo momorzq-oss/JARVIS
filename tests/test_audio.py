@@ -200,6 +200,30 @@ def test_wake_detection_is_suppressed_during_speech():
     assert emissions == []
 
 
+def test_voice_engine_does_not_repeat_controller_response():
+    """The controller/main pipeline owns normal response playback exactly once."""
+    state = VoiceState()
+    spoken = []
+    speech = type("Speech", (), {"speak": lambda self, text: spoken.append(text)})()
+    listener = type("Listener", (), {"preload": lambda self: None})()
+    controller = type(
+        "Controller",
+        (),
+        {
+            "ctx": type("Context", (), {"listener": listener})(),
+            "handle_text": lambda self, text, from_voice=False: "One response only.",
+            "_set_state": lambda self, *args: None,
+            "_emit": lambda self, *args: None,
+        },
+    )()
+    engine = VoiceEngine(controller, state, speech)
+    engine._listener = type("Transcriber", (), {"transcribe": lambda self, audio: "hello"})()
+
+    engine._do_transcription_and_route(np.zeros(1280, dtype=np.int16))
+
+    assert spoken == []
+
+
 def test_wake_detection_is_deduplicated_for_active_session():
     state = VoiceState()
     speech = type("Speech", (), {"speaking": False})()

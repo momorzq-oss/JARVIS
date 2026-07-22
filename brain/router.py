@@ -69,9 +69,11 @@ FAST_RULES = [
      lambda m: {"skill": "task.speed", "params": {"direction": "slower"}}),
 
     # --- time / date ----------------------------------------------------------
-    (_rgx(r"^what(?:'s| is) the time|^what time is it"),
+    # Keep these fully local: a simple clock question must work while the
+    # conversational provider, Hermes, or the network is unavailable.
+    (_rgx(r"^(?:(?:jarvis)[, ]*)?(?:(?:what(?:'s| is)|can you tell me|tell me|give me|do you know) (?:the )?(?:current )?time(?: now)?|what time is it(?: now)?|time please|current time)[.!? ]*$"),
      lambda m: {"skill": "smalltalk", "params": {"kind": "time"}}),
-    (_rgx(r"^what(?:'s| is) (?:the )?(?:date|today)|^what day is (?:it|today)"),
+    (_rgx(r"^(?:(?:jarvis)[, ]*)?(?:(?:what(?:'s| is)|can you tell me|tell me) (?:the )?(?:date|day|today)|what day is (?:it|today))[.!? ]*$"),
      lambda m: {"skill": "smalltalk", "params": {"kind": "date"}}),
 
     # --- music ------------------------------------------------------------------

@@ -19,6 +19,13 @@ def test_registry_includes_approved_operations():
     assert by_id["system.shutdown"].permission == "SYSTEM_POWER"
 
 
+def test_adapter_backed_office_and_website_capabilities_are_not_missing():
+    registry = CapabilityRegistry()
+    records = {record.capability_id: record for record in registry.discover()}
+    assert records["office.create_document"].status != "MISSING"
+    assert records["website.gmail_search"].status != "MISSING"
+
+
 def test_every_registered_intent_has_permission_scope():
     registry = CapabilityRegistry()
     by_id = {record.capability_id: record for record in registry.discover()}

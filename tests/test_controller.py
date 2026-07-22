@@ -157,6 +157,16 @@ def test_handle_text_updates_last_command_and_response(monkeypatch):
     assert "heard" in events and "cleaned" in events
 
 
+def test_registry_command_is_spoken_once_by_controller():
+    ctx = make_ctx()
+    ctl = AssistantController(ctx=ctx, skip_preload=True)
+
+    spoken = ctl.handle_text("/help")
+
+    assert spoken.startswith("Registry commands:")
+    assert ctx.speaker.spoken == [spoken]
+
+
 def test_start_voice_twice_does_not_recreate_engine(monkeypatch):
     ctx = make_ctx()
     ctl = AssistantController(ctx=ctx, skip_preload=True)

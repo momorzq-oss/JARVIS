@@ -19,8 +19,8 @@ openai==1.51.0
 faster-whisper==1.0.3
 sounddevice==0.4.7
 webrtcvad==2.0.10
-edge-tts==6.1.12
-pygame==2.6.0
+# Piper playback uses sounddevice/PortAudio directly. pygame has no usable
+# wheel for the live Python 3.14 runtime and is not a JARVIS dependency.
 openwakeword==0.6.0
 onnxruntime==1.27.0
 numpy==1.26.4

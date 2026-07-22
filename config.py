@@ -104,7 +104,7 @@ class Config:
     # ---- Cloud brain (OpenRouter, OpenAI-compatible) ------------------------
     OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
     OPENROUTER_MODEL = os.getenv(
-        "OPENROUTER_MODEL", "deepseek/deepseek-v4-flash"
+        "OPENROUTER_MODEL", "openai/gpt-oss-safeguard-20b"
     ).strip()
     OPENROUTER_BASE_URL = os.getenv(
         "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
@@ -140,10 +140,42 @@ class Config:
     ).strip()
     WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "auto").strip().lower()
     GPU_ENABLED = _env_flag("GPU_ENABLED", True)
-    EDGE_TTS_ENABLED = _env_flag("EDGE_TTS_ENABLED", False)
     LOCAL_ROUTER_ENABLED = _env_flag("LOCAL_ROUTER_ENABLED", not getattr(sys, "frozen", False))
     OPENROUTER_TIMEOUT = int(os.getenv("OPENROUTER_TIMEOUT", "60"))
     OPENROUTER_RETRIES = int(os.getenv("OPENROUTER_RETRIES", "3"))
+
+    # ---- Optional Colibri local runtime -----------------------------------
+    # JARVIS never installs, starts, or exposes Colibri automatically.  When
+    # enabled it may only contact its documented loopback OpenAI-compatible API.
+    COLIBRI_ENABLED = _env_flag("COLIBRI_ENABLED", False)
+    COLIBRI_MODE = os.getenv("COLIBRI_MODE", "disabled").strip().lower()
+    COLIBRI_REPOSITORY_URL = os.getenv(
+        "COLIBRI_REPOSITORY_URL", "https://github.com/JustVugg/colibri.git"
+    ).strip()
+    COLIBRI_COMMIT = os.getenv(
+        "COLIBRI_COMMIT", "44e489b196c9b7876b3d37a0570ebf1c6f90f54c"
+    ).strip()
+    COLIBRI_BASE_URL = os.getenv("COLIBRI_BASE_URL", "http://127.0.0.1:8000/v1").strip()
+    COLIBRI_MODEL = os.getenv("COLIBRI_MODEL", "glm-5.2-colibri").strip()
+    COLIBRI_TIMEOUT_SECONDS = int(os.getenv("COLIBRI_TIMEOUT_SECONDS", "60"))
+
+    # ---- Optional Hermes orchestration ------------------------------------
+    # Disabled unless a separately installed Hermes instance passes JARVIS's
+    # protocol and safety checks. Hermes never receives desktop primitives.
+    HERMES_ENABLED = _env_flag("HERMES_ENABLED", False)
+    HERMES_MODE = os.getenv("HERMES_MODE", "disabled").strip().lower()
+    HERMES_EXECUTABLE = os.getenv("HERMES_EXECUTABLE", "").strip()
+    HERMES_BASE_URL = os.getenv("HERMES_BASE_URL", "").strip()
+    HERMES_MODEL = os.getenv("HERMES_MODEL", "").strip()
+    HERMES_PROVIDER = os.getenv("HERMES_PROVIDER", "openrouter").strip()
+    HERMES_TIMEOUT_SECONDS = int(os.getenv("HERMES_TIMEOUT_SECONDS", "120"))
+    HERMES_MAX_STEPS = int(os.getenv("HERMES_MAX_STEPS", "25"))
+    HERMES_MAX_RETRIES = int(os.getenv("HERMES_MAX_RETRIES", "2"))
+    HERMES_MAX_CONCURRENT_TASKS = int(os.getenv("HERMES_MAX_CONCURRENT_TASKS", "2"))
+    HERMES_BACKGROUND_TASKS_ENABLED = _env_flag("HERMES_BACKGROUND_TASKS_ENABLED", False)
+    HERMES_SCHEDULING_ENABLED = _env_flag("HERMES_SCHEDULING_ENABLED", False)
+    HERMES_LEARNING_ENABLED = _env_flag("HERMES_LEARNING_ENABLED", False)
+    HERMES_TOOL_ACCESS_MODE = os.getenv("HERMES_TOOL_ACCESS_MODE", "jarvis_registry_only").strip()
     LIVE_TYPING_MODE = os.getenv("LIVE_TYPING_MODE", "section").strip().lower()
     LIVE_TYPING_DELAY_MS = int(os.getenv("LIVE_TYPING_DELAY_MS", "20"))
 

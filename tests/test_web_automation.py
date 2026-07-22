@@ -92,3 +92,35 @@ def test_website_adapter_registry_is_explicit():
 
 def test_download_filename_is_sanitized():
     assert descriptive_download_name("../report?.pdf") == "report_.pdf"
+
+
+def test_execute_routes_local_youtube_search_and_play(monkeypatch):
+    service = _service()
+    expected = WebActionResult("success", "youtube_play_relevant", "Selected local result.")
+    observed = {}
+
+    def play(query, selection):
+        observed.update(query=query, selection=selection)
+        return expected
+
+    monkeypatch.setattr(service, "search_youtube_and_play", play)
+    result = service.execute({
+        "skill": "browser.search_youtube_and_play",
+        "params": {"query": "building a local LLM", "selection": "most_relevant"},
+    })
+
+    assert result == "Selected local result."
+    assert observed == {"query": "building a local LLM", "selection": "most_relevant"}
+
+
+def test_close_named_tab_stays_inside_jarvis_browser_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(Config, "WEB_ACTION_LOG_FILE", tmp_path / "web.jsonl")
+    page = FakePage("https://www.youtube.com/results?search_query=llm", "YouTube: LLM")
+    closed = []
+    page.close = lambda: closed.append(True)
+    service = _service(page)
+
+    result = service.close_tab("youtube")
+
+    assert result.status == "success"
+    assert closed == [True]

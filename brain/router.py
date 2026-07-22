@@ -209,6 +209,17 @@ def fast_lane(text):
     t = (text or "").strip()
     if not t:
         return None
+    # Browser navigation must be decided before the generic "open X" / "search
+    # X" rules below.  Otherwise flexible requests such as "open Google and
+    # look up local LLM education" become an application launch and can fall
+    # through to a cloud planner.
+    try:
+        from core.automation_intents import classify_browser_intent
+        browser_intent = classify_browser_intent(t)
+        if browser_intent is not None:
+            return browser_intent
+    except Exception:
+        pass
     for pattern, builder in FAST_RULES:
         m = pattern.search(t)
         if m:
@@ -229,7 +240,7 @@ def fast_lane(text):
 VALID_SKILLS = {
     "app.open", "app.open_app", "app.open_file", "app.open_folder", "app.search_file", "app.close", "system.volume", "system.screenshot", "system.lock",
     "system.shutdown", "system.status", "media.play_music", "media.control",
-    "browser.open", "browser.open_site", "browser.search_youtube", "browser.close", "web.search", "news.latest",
+    "browser.open", "browser.open_site", "browser.search_youtube", "browser.search_youtube_and_play", "browser.close", "web.search", "news.latest",
     "news.topic", "news.more", "news.save", "email.check", "email.read",
     "email.compose", "email.reply", "whatsapp.open", "whatsapp.read",
     "whatsapp.reply", "word.write", "word.continue", "office_word.create_document",
@@ -245,7 +256,7 @@ VALID_SKILLS = {
     "browser.back", "browser.forward", "browser.new_tab", "browser.close_tab",
     "browser.switch_tab", "browser.read_page", "browser.find_on_page",
     "browser.fill_form", "browser.submit_form", "browser.download",
-    "browser.upload", "browser.youtube_play_first", "browser.play_video",
+    "browser.upload", "browser.youtube_play_first", "browser.youtube_play_relevant", "browser.play_video",
     "browser.pause_video",
     "website.gmail_search", "website.gmail_open_latest",
     "website.gmail_reply_draft", "website.drive_search",

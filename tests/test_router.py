@@ -32,7 +32,7 @@ CASES = [
     ("close it", "app.close", {"target": ""}),
     ("close everything you opened", "app.close", {"target": "__all__"}),
     ("close the browser", "browser.close", {"target": "browser"}),
-    ("close YouTube", "app.close", {"target": "YouTube"}),
+    ("close YouTube", "browser.close_tab", {"target": "youtube"}),
     ("open calculator", "app.open", {"target": "calculator"}),
     ("check my email", "email.check", {}),
     ("latest news", "news.latest", {}),

@@ -161,14 +161,15 @@ SLOW_PREFIXES = ("email.", "news.", "research.", "word.", "excel.", "ppt.",
 def _handle_browser(intent, ctx):
     params = intent.get("params", {}) or {}
     if intent["skill"] in {
-        "browser.open", "browser.open_site", "browser.search_youtube", "browser.close",
+        "browser.open", "browser.open_site", "browser.search_youtube",
+        "browser.search_youtube_and_play", "browser.close",
     } and getattr(ctx, "web_automation", None) is not None:
         return ctx.web_automation.execute(intent)
     if intent["skill"] in {
         "browser.back", "browser.forward", "browser.new_tab", "browser.close_tab",
         "browser.switch_tab", "browser.read_page", "browser.find_on_page",
         "browser.fill_form", "browser.submit_form", "browser.download",
-        "browser.upload", "browser.youtube_play_first", "browser.play_video",
+        "browser.upload", "browser.youtube_play_first", "browser.youtube_play_relevant", "browser.play_video",
         "browser.pause_video",
     }:
         return ctx.web_automation.execute(intent)
@@ -431,6 +432,27 @@ def handle_utterance(text, ctx):
     if handled:
         if spoken:
             log("result", f"pending response generated ({len(spoken)} characters)", "green")
+            ctx.speaker.speak(spoken)
+        return spoken
+
+    # Use the compact JARVIS-owned browser context before compound planning.
+    # This keeps follow-ups such as "look for another one" and "close it"
+    # local to the browser session rather than sending them to a model.
+    try:
+        from core.automation_intents import classify_browser_intent
+        browser_intent = classify_browser_intent(text, ctx.state)
+    except Exception:
+        browser_intent = None
+    if browser_intent is not None:
+        log(
+            "intent",
+            f"{browser_intent['skill']} params="
+            f"{sorted((browser_intent.get('params') or {}).keys())}",
+            "yellow",
+        )
+        spoken = dispatch(browser_intent, ctx)
+        if spoken:
+            log("result", f"response generated ({len(spoken)} characters)", "green")
             ctx.speaker.speak(spoken)
         return spoken
 

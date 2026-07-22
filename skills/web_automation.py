@@ -12,6 +12,18 @@ from urllib.parse import urlparse
 from config import Config
 
 
+def _query_terms(value):
+    """Small local tokenizer used only to rank already-visible YouTube titles."""
+    stop_words = {
+        "a", "an", "and", "about", "for", "how", "in", "is", "it", "of",
+        "on", "the", "to", "with",
+    }
+    return {
+        word for word in re.findall(r"[a-z0-9]+", str(value).lower())
+        if len(word) > 1 and word not in stop_words
+    }
+
+
 @dataclasses.dataclass
 class WebActionResult:
     status: str
@@ -79,6 +91,20 @@ class BrowserAutomationService:
         if task is not None:
             task.checkpoint()
 
+    def _remember_browser_context(self, destination, *, query="", action="",
+                                  content_type="web_page", page=None):
+        """Keep only the minimal context needed for local browser follow-ups."""
+        previous = self.ctx.state.get("browser_context", {})
+        previous = previous if isinstance(previous, dict) else {}
+        self.ctx.state["browser_context"] = {
+            "destination": str(destination or previous.get("destination") or "").lower(),
+            "query": str(query or previous.get("query") or "").strip(),
+            "action": str(action or previous.get("action") or ""),
+            "content_type": str(content_type or previous.get("content_type") or "web_page"),
+            "url": getattr(page, "url", "") if page is not None else previous.get("url", ""),
+            "last_focused_at": time.time(),
+        }
+
     def _active_page(self):
         if not self.browser.ensure():
             return None
@@ -120,6 +146,8 @@ class BrowserAutomationService:
     def open_browser(self):
         self._checkpoint()
         ok = self.browser.ensure()
+        if ok:
+            self._remember_browser_context("browser", action="open")
         return self._log(self._result("success" if ok else "failed", "open_browser",
                                      "Browser ready." if ok else "The browser could not be started."))
 
@@ -129,6 +157,7 @@ class BrowserAutomationService:
         if page is None:
             return self._log(self._result("failed", "open_website", f"Could not open {site}."))
         self.ctx.state["active_website"] = str(site).lower().strip()
+        self._remember_browser_context(site, action="open", page=page)
         return self._log(self._result("success", "open_website", f"Opened {site} and verified the page.", page))
 
     def search_web(self, query):
@@ -137,6 +166,7 @@ class BrowserAutomationService:
         if page is None:
             return self._log(self._result("failed", "search_web", "Web search failed."))
         self.ctx.state["active_website"] = "google"
+        self._remember_browser_context("google", query=query, action="search", page=page)
         return self._log(self._result("success", "search_web", f"Google results for {query} are visible.", page))
 
     def search_youtube(self, query):
@@ -145,7 +175,15 @@ class BrowserAutomationService:
         if page is None:
             return self._log(self._result("failed", "search_youtube", "YouTube search failed."))
         self.ctx.state["active_website"] = "youtube"
+        self._remember_browser_context("youtube", query=query, action="search", content_type="video", page=page)
         return self._log(self._result("success", "search_youtube", f"YouTube results for {query} are visible.", page))
+
+    def search_youtube_and_play(self, query, selection="most_relevant"):
+        """Search YouTube, then choose a locally ranked normal-video result."""
+        searched = self.search_youtube(query)
+        if searched.status != "success":
+            return searched
+        return self.youtube_play_relevant(query, selection=selection)
 
     def back(self):
         page = self._active_page()
@@ -170,10 +208,24 @@ class BrowserAutomationService:
         page = self.browser.context.new_page()
         if url and url != "about:blank":
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        self._remember_browser_context("browser", action="new_tab", page=page)
         return self._log(self._result("success", "new_tab", "Opened a new browser tab.", page))
 
-    def close_tab(self):
-        page = self._active_page()
+    def close_tab(self, target=""):
+        """Close the current or a named JARVIS-owned Playwright tab only."""
+        page = None
+        target_low = str(target or "").strip().lower()
+        if target_low and target_low not in {"current", "this", "last"}:
+            try:
+                for candidate in reversed(list(self.browser.context.pages)):
+                    title = candidate.title().lower()
+                    url = str(candidate.url).lower()
+                    if target_low in title or target_low in url:
+                        page = candidate
+                        break
+            except Exception:
+                page = None
+        page = page or self._active_page()
         if page is None:
             return self._log(self._result("failed", "close_tab", "No active browser tab."))
         title = ""
@@ -182,6 +234,7 @@ class BrowserAutomationService:
             page.close()
         except Exception as exc:
             return self._log(self._result("failed", "close_tab", "The tab could not be closed.", error=str(exc)))
+        self._remember_browser_context("", action="close_tab")
         return self._log(self._result("success", "close_tab", f"Closed {title or 'the current tab'}."))
 
     def close_browser(self):
@@ -316,16 +369,56 @@ class BrowserAutomationService:
             return self._log(self._result("failed", "upload", "Upload failed safely.", page, error=str(exc), approval_status="approved_once"))
 
     def youtube_play_first(self):
+        return self.youtube_play_relevant("")
+
+    def youtube_play_relevant(self, query, selection="most_relevant"):
+        """Pick the strongest locally relevant YouTube video, never an ad/Short."""
         page = self._active_page()
         if page is None or not self.verify_domain(page, ("youtube.com",)):
-            return self._log(self._result("failed", "youtube_play_first", "The active tab is not YouTube.", page))
+            return self._log(self._result("failed", "youtube_play_relevant", "The active tab is not YouTube.", page))
         self._checkpoint()
         try:
-            page.locator("a#video-title").first.click(timeout=15000)
+            candidates = page.locator("ytd-video-renderer a#video-title")
+            count = min(candidates.count(), 12)
+            terms = _query_terms(query)
+            ranked = []
+            for index in range(count):
+                candidate = candidates.nth(index)
+                title = (candidate.get_attribute("title") or candidate.inner_text() or "").strip()
+                href = (candidate.get_attribute("href") or "").lower()
+                title_low = title.lower()
+                if not title or "/shorts/" in href or "live" in title_low:
+                    continue
+                title_terms = _query_terms(title)
+                overlap = len(terms & title_terms)
+                if terms and not overlap:
+                    continue
+                score = overlap * 10
+                if any(word in title_low for word in ("tutorial", "guide", "explained", "learn", "course")):
+                    score += 3
+                # Stable result ordering breaks equal scores without treating a
+                # popular or sponsored item as objectively "best".
+                ranked.append((score, -index, title, candidate))
+            if not ranked:
+                return self._log(self._result(
+                    "failed", "youtube_play_relevant",
+                    "No clearly relevant normal video result was found.", page,
+                ))
+            _score, _order, selected_title, selected = max(ranked, key=lambda item: item[:2])
+            selected.click(timeout=15000)
             page.wait_for_load_state("domcontentloaded", timeout=30000)
-            return self._log(self._result("success", "youtube_play_first", "Playing the first YouTube result.", page))
+            try:
+                page.locator("video").first.evaluate("video => video.play()")
+            except Exception:
+                pass  # A click normally starts playback; browser policy may require it.
+            self._remember_browser_context("youtube", query=query, action="play", content_type="video", page=page)
+            return self._log(self._result(
+                "success", "youtube_play_relevant",
+                f"I selected the most relevant result I found: {selected_title}.", page,
+                data={"selection": selection or "most_relevant", "title": selected_title},
+            ))
         except Exception as exc:
-            return self._log(self._result("failed", "youtube_play_first", "Could not play the first result.", page, error=str(exc)))
+            return self._log(self._result("failed", "youtube_play_relevant", "Could not open the selected YouTube result.", page, error=str(exc)))
 
     def video_control(self, action):
         page = self._active_page()
@@ -380,11 +473,14 @@ class BrowserAutomationService:
             "browser.open_site": lambda: self.open_website(params.get("site", "")),
             "web.search": lambda: self.search_web(params.get("query", "")),
             "browser.search_youtube": lambda: self.search_youtube(params.get("query", "")),
+            "browser.search_youtube_and_play": lambda: self.search_youtube_and_play(
+                params.get("query", ""), params.get("selection", "most_relevant"),
+            ),
             "browser.close": self.close_browser,
             "browser.back": self.back,
             "browser.forward": self.forward,
             "browser.new_tab": lambda: self.new_tab(params.get("url", "about:blank")),
-            "browser.close_tab": self.close_tab,
+            "browser.close_tab": lambda: self.close_tab(params.get("target", "")),
             "browser.switch_tab": lambda: self.switch_tab(params.get("target", "")),
             "browser.read_page": lambda: self.read_page(bool(params.get("summarize"))),
             "browser.find_on_page": lambda: self.find_on_page(params.get("query", "")),
@@ -393,6 +489,9 @@ class BrowserAutomationService:
             "browser.download": lambda: self.download(params.get("target", "")),
             "browser.upload": lambda: self.upload(params.get("target", "")),
             "browser.youtube_play_first": self.youtube_play_first,
+            "browser.youtube_play_relevant": lambda: self.youtube_play_relevant(
+                params.get("query", ""), params.get("selection", "most_relevant"),
+            ),
             "browser.play_video": lambda: self.video_control("play"),
             "browser.pause_video": lambda: self.video_control("pause"),
         }

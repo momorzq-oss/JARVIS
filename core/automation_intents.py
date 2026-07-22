@@ -41,6 +41,274 @@ SITE_ALIASES = {
     "twitter": "x",
 }
 
+# Keep browser wording local and deliberately small.  These are destination
+# aliases, not a cloud classifier vocabulary: the parser below still extracts
+# a free-form topic from the rest of the request.
+BROWSER_ALIASES = {
+    "chrome": "chrome",
+    "google chrome": "chrome",
+    "google browser": "chrome",
+    # Common speech-recognition substitution when the speaker asks to browse.
+    "chromecast browser": "chrome",
+    "browser": "chrome",
+    "a browser": "chrome",
+    "web browser": "chrome",
+}
+
+_BROWSER_FILLER = re.compile(
+    r"\b(?:please|for me|can you|could you|would you|i want to|i need to|"
+    r"can you get|let me|something|a good|the best|most relevant|useful|"
+    r"information|me|about|on|for|to|of|with|explaining|explain|show me|look up)\b",
+    re.I,
+)
+_BROWSER_STOP_WORDS = {
+    "a", "an", "and", "about", "for", "how", "i", "in", "is", "it",
+    "me", "my", "of", "on", "or", "please", "the", "this", "to", "with",
+}
+
+
+def _clean_browser_query(value):
+    """Remove request scaffolding while leaving the user topic untouched."""
+    query = str(value or "").strip(" .,!?:;-\t\r\n")
+    query = re.sub(
+        r"^(?:and|then|for|about|on|regarding|of)\s+", "", query, flags=re.I,
+    )
+    query = re.sub(
+        r"\b(?:on|in)\s+(?:the\s+)?(?:web|google|youtube)\b", "", query,
+        flags=re.I,
+    )
+    query = re.sub(r"\s+", " ", query).strip(" .,!?:;-")
+    return query
+
+
+def _query_terms(query):
+    return {
+        word for word in re.findall(r"[a-z0-9]+", str(query).lower())
+        if len(word) > 1 and word not in _BROWSER_STOP_WORDS
+    }
+
+
+def _browser_context(state):
+    """Read only the compact, non-sensitive context kept by web automation."""
+    if not isinstance(state, dict):
+        return {}
+    context = state.get("browser_context", {})
+    return context if isinstance(context, dict) else {}
+
+
+def _browser_params(*, destination="", query="", content_type="web_page",
+                    action="open", browser="", new_tab=False, selection="",
+                    target="", site=""):
+    """Build one inspectable local browser action without empty noise."""
+    params = {"intent_group": "BROWSER_LOCAL", "action": action}
+    if destination:
+        params["destination"] = destination
+    if query:
+        params["query"] = query
+    if content_type:
+        params["content_type"] = content_type
+    if browser:
+        params["browser"] = browser
+    if new_tab:
+        params["new_tab"] = True
+    if selection:
+        params["selection"] = selection
+    if target:
+        params["target"] = target
+    if site:
+        params["site"] = site
+    return params
+
+
+def _extract_browser_query(cleaned, destination=""):
+    """Extract a topic from flexible search/video phrasing without an LLM."""
+    value = cleaned
+    # Strip a destination whether it appears at the beginning or after a verb.
+    if destination == "youtube":
+        value = re.sub(r"\b(?:on\s+)?youtube\b", " ", value, flags=re.I)
+    elif destination == "google":
+        value = re.sub(r"\b(?:on\s+)?google\b", " ", value, flags=re.I)
+
+    marker = re.search(
+        r"\b(?:search|find|look for|look up|show me|show|play|watch)\s*"
+        r"(?:for\s+)?(.+)$",
+        value, re.I,
+    )
+    if marker:
+        value = marker.group(1)
+
+    value = re.sub(
+        r"\b(?:open|launch|bring up|go to|navigate to|search|find|look|look for|"
+        r"look up|show|play|watch|browse|searching)\b", " ", value, flags=re.I,
+    )
+    value = re.sub(
+        r"\b(?:a|an|the)?\s*(?:educational\s+)?(?:video|videos|tutorial|"
+        r"tutorials|lesson|lessons|article|articles|documentation|docs?|web page)\b",
+        " ", value, flags=re.I,
+    )
+    value = _BROWSER_FILLER.sub(" ", value)
+    return _clean_browser_query(value)
+
+
+def classify_browser_intent(text, state=None):
+    """Classify ordinary browser requests without a model or cloud service.
+
+    The result is deliberately a normal JARVIS intent.  Execution remains in
+    the existing action schema and BrowserAutomationService; this function
+    only turns flexible language into structured, reviewable parameters.
+    """
+    cleaned = normalize_automation_text(text)
+    low = cleaned.lower().strip(" .!?")
+    if not low:
+        return None
+
+    # Retain the compact established intents for exact legacy commands; the
+    # fast lane below already handles them locally.  This keeps compatibility
+    # for callers that compare those small payloads exactly.
+    if re.fullmatch(r"open (?:the )?(?:web )?browser", low):
+        return None
+    if re.fullmatch(r"search google(?: for)? .+", low):
+        return None
+    if re.match(r"(?:find|locate|search for) (?:the )?file\b", low):
+        return None
+    if re.fullmatch(r"play (?:the )?first (?:result|video)", low):
+        return None
+
+    context = _browser_context(state)
+    active_destination = str(context.get("destination") or "").lower()
+    previous_query = str(context.get("query") or "").strip()
+    new_tab = bool(re.search(r"\b(?:open|start|make)\s+(?:a\s+)?new tab\b|\bin a new tab\b", low))
+    explicit_youtube = bool(re.search(r"\byoutube\b", low))
+    explicit_google = bool(re.search(r"\bgoogle\b", low))
+    browser_name = next(
+        (name for name in sorted(BROWSER_ALIASES, key=len, reverse=True)
+         if re.search(rf"\b{re.escape(name)}\b", low)),
+        "",
+    )
+    browser = BROWSER_ALIASES.get(browser_name, "")
+
+    if re.fullmatch(r"(?:go online|browse the web|i need to browse(?: the web)?)", low):
+        return {"skill": "browser.open", "params": _browser_params(
+            destination="browser", action="open", browser="chrome",
+        )}
+
+    # Music is intentionally handled by the established media service.  A
+    # bare "play <title> on YouTube" is music unless the speaker identifies
+    # educational/video content or a result-selection request.
+    if re.search(r"\b(?:music|song|track|album|artist)\b", low):
+        return None
+    if (low.startswith("play ") and explicit_youtube
+            and not re.search(r"\b(?:video|tutorial|lesson|educational|documentary)\b", low)
+            and not re.search(r"\b(?:best|most relevant|useful)\b", low)):
+        return None
+
+    # Tab and playback controls must win over broad "close" or "play" rules.
+    if re.fullmatch(r"(?:open )?(?:this |that )?(?:in )?(?:a )?new tab", low):
+        return {"skill": "browser.new_tab", "params": _browser_params(
+            destination=active_destination, action="new_tab", browser=browser,
+            new_tab=True,
+        )}
+    if re.fullmatch(r"(?:close|shut) (?:this |the |current |last )?tab", low):
+        return {"skill": "browser.close_tab", "params": _browser_params(
+            destination=active_destination, action="close_tab", target="current",
+        )}
+    named_tab = re.fullmatch(r"(?:close|shut) (?:the )?(youtube|google) tab", low)
+    if named_tab:
+        return {"skill": "browser.close_tab", "params": _browser_params(
+            destination=named_tab.group(1), action="close_tab", target=named_tab.group(1),
+        )}
+    if active_destination == "youtube" and re.fullmatch(r"(?:pause|resume|continue|play|mute|unmute)(?: it| this| the video)?", low):
+        action = low.split()[0]
+        if action in {"pause", "resume", "continue"}:
+            return {"skill": "browser.pause_video" if action == "pause" else "browser.play_video",
+                    "params": _browser_params(destination="youtube", action=action)}
+        if action == "play":
+            return {"skill": "browser.play_video", "params": _browser_params(destination="youtube", action=action)}
+
+    if re.fullmatch(r"(?:go|navigate) back|back to the previous page", low):
+        return {"skill": "browser.back", "params": _browser_params(
+            destination=active_destination, action="back",
+        )}
+    if re.fullmatch(r"(?:go|navigate) forward", low):
+        return {"skill": "browser.forward", "params": _browser_params(
+            destination=active_destination, action="forward",
+        )}
+
+    site_names = "|".join(sorted((re.escape(name) for name in SITE_ALIASES), key=len, reverse=True))
+    site_match = re.fullmatch(rf"(?:open|go to|show|launch|bring up) (?:the )?({site_names})", low)
+    if site_match:
+        site = SITE_ALIASES[site_match.group(1)]
+        return {"skill": "browser.open_site", "params": _browser_params(
+            destination=site, action="open", browser=browser, new_tab=new_tab,
+            target=site, site=site,
+        )}
+
+    # Browser/window close is intentionally distinct from closing a YouTube
+    # or Google tab.  The latter only affects JARVIS-owned browser pages.
+    if re.fullmatch(r"(?:close|exit|quit|shut down|shut) (?:the )?(?:browser|chrome|google chrome|google browser|chromecast browser)", low):
+        return {"skill": "browser.close", "params": _browser_params(
+            destination="browser", action="close", browser=browser or "chrome", target="browser",
+        )}
+    if re.fullmatch(r"(?:close|exit|quit|shut) (?:the )?(youtube|google)", low):
+        target = re.fullmatch(r"(?:close|exit|quit|shut) (?:the )?(youtube|google)", low).group(1)
+        return {"skill": "browser.close_tab", "params": _browser_params(
+            destination=target, action="close_tab", target=target,
+        )}
+    if low in {"close it", "close this", "close that"} and active_destination in {"youtube", "google"}:
+        return {"skill": "browser.close_tab", "params": _browser_params(
+            destination=active_destination, action="close_tab", target="current",
+        )}
+
+    # A search/play request can name a site, name a media type, or use the
+    # active JARVIS browser context established by the previous request.
+    media_video = bool(re.search(r"\b(?:video|videos|watch|watching)\b", low))
+    media_tutorial = bool(re.search(r"\b(?:tutorial|tutorials|lesson|lessons)\b", low))
+    asks_playback = bool(re.search(r"\b(?:play|watch)\b", low))
+    asks_search = bool(re.search(r"\b(?:search|find|look for|look up|show me|browse)\b", low))
+    selection = "most_relevant" if re.search(r"\b(?:best|most relevant|useful)\b", low) else ""
+    destination = "youtube" if explicit_youtube else "google" if explicit_google else ""
+    if not destination and (media_video or asks_playback or (media_tutorial and selection)):
+        destination = "youtube"
+    if not destination and active_destination in {"youtube", "google"} and (asks_search or asks_playback):
+        destination = active_destination
+    if not destination and asks_search:
+        destination = "google"
+
+    query = _extract_browser_query(cleaned, destination)
+    if query.lower() in {"one", "it", "this", "that", "another"}:
+        query = ""
+    if not query and previous_query and re.search(r"\b(?:one|it|this|that|another)\b", low):
+        query = previous_query
+    content_type = (
+        "video" if media_video else "tutorial" if media_tutorial else
+        "article" if re.search(r"\b(?:article|information|documentation|docs?)\b", low) else "web_page"
+    )
+
+    if destination and query and (asks_search or asks_playback or explicit_youtube or explicit_google):
+        if destination == "youtube" and asks_playback:
+            return {"skill": "browser.search_youtube_and_play", "params": _browser_params(
+                destination="youtube", query=query, content_type=content_type,
+                action="play", browser=browser, new_tab=new_tab,
+                selection=selection or "most_relevant",
+            )}
+        return {"skill": "browser.search_youtube" if destination == "youtube" else "web.search",
+                "params": _browser_params(
+                    destination=destination, query=query, content_type=content_type,
+                    action="search", browser=browser, new_tab=new_tab, selection=selection,
+                )}
+
+    # "Open Google and look up X" and "Open YouTube" without a query.
+    if destination in {"google", "youtube"} and not query:
+        return {"skill": "browser.open_site", "params": _browser_params(
+            destination=destination, action="open", browser=browser, new_tab=new_tab,
+            target=destination, site=destination,
+        )}
+    if browser or re.fullmatch(r"(?:go online|browse the web|i need to browse(?: the web)?|open (?:a |the )?(?:web )?browser)", low):
+        return {"skill": "browser.open", "params": _browser_params(
+            destination="browser", action="open", browser=browser or "chrome",
+        )}
+    return None
+
 NUMBER_WORDS = {
     "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
     "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,

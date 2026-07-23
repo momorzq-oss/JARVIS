@@ -1,4 +1,5 @@
 import pytest
+import threading
 from types import SimpleNamespace
 
 from brain.hermes_orchestrator import HermesOrchestrator
@@ -145,4 +146,66 @@ def test_unverified_executor_result_fails_task_without_progress():
     assert task.status == "FAILED"
     assert task.current_step == 0
     assert "verified status" in task.last_error
+    assert results == []
+
+
+def test_cancel_during_trusted_step_discards_late_result_without_error():
+    orchestrator = HermesOrchestrator(capability_registry=_browser_registry())
+    request = orchestrator.prepare_request("goal", "request")
+    payload = _one_step_plan(request)
+    _plan, waiting = orchestrator.accept_plan(request, payload)
+    started = threading.Event()
+    release = threading.Event()
+    returned = []
+    errors = []
+
+    def execute(_step):
+        started.set()
+        release.wait(timeout=2)
+        return {"ok": True, "result": "late result", "output_files": ["late.txt"]}
+
+    def run():
+        try:
+            returned.append(orchestrator.run_approved_plan(
+                request, payload, execute, approved=True,
+                task_id=waiting.task_id,
+            ))
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    assert started.wait(timeout=1)
+    orchestrator.tasks.cancel(waiting.task_id)
+    release.set()
+    worker.join(timeout=2)
+
+    assert worker.is_alive() is False
+    assert errors == []
+    _plan, task, results = returned[0]
+    assert task.status == "CANCELLED"
+    assert task.progress == 0
+    assert task.output_files == []
+    assert results == []
+
+
+def test_cancelled_failed_step_does_not_retry_or_overwrite_terminal_state():
+    orchestrator = HermesOrchestrator(capability_registry=_browser_registry())
+    request = orchestrator.prepare_request("goal", "request")
+    payload = _one_step_plan(request, failure_strategy="retry")
+    _plan, waiting = orchestrator.accept_plan(request, payload)
+    attempts = []
+
+    def execute(_step):
+        attempts.append(True)
+        orchestrator.tasks.cancel(waiting.task_id)
+        raise RuntimeError("operation interrupted")
+
+    _plan, task, results = orchestrator.run_approved_plan(
+        request, payload, execute, approved=True, task_id=waiting.task_id,
+    )
+
+    assert attempts == [True]
+    assert task.status == "CANCELLED"
+    assert task.retries == 0
     assert results == []

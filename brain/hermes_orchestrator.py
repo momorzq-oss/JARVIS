@@ -100,6 +100,9 @@ class HermesOrchestrator:
                         raise RuntimeError(str(outcome.get("error") or "success condition failed"))
                     break
                 except Exception as exc:
+                    current = self.tasks.get(task.task_id)
+                    if current is not None and current.cancellation_token:
+                        return plan, current, results
                     if (step["failure_strategy"] == "retry"
                             and attempts < Config.HERMES_MAX_RETRIES):
                         attempts += 1
@@ -109,10 +112,22 @@ class HermesOrchestrator:
                         continue
                     self.tasks.transition(task.task_id, "FAILED", error=str(exc))
                     return plan, self.tasks.get(task.task_id), results
+            # Cancellation can win while a bounded trusted operation is in
+            # flight. Its late return must not record progress/output or
+            # escape as a misleading pipeline error.
+            current = self.tasks.get(task.task_id)
+            if current is not None and current.cancellation_token:
+                return plan, current, results
+            try:
+                self.tasks.complete_step(
+                    task.task_id, step["capability_id"], step["permission_scope"],
+                    outcome.get("output_files") or [],
+                )
+            except RuntimeError:
+                current = self.tasks.get(task.task_id)
+                if current is not None and current.cancellation_token:
+                    return plan, current, results
+                raise
             results.append(outcome.get("result"))
-            self.tasks.complete_step(
-                task.task_id, step["capability_id"], step["permission_scope"],
-                outcome.get("output_files") or [],
-            )
         self.tasks.transition(task.task_id, "COMPLETED")
         return plan, self.tasks.get(task.task_id), results

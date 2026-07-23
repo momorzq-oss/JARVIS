@@ -355,6 +355,29 @@ def test_supplied_word_text_and_explicit_save_use_local_context():
     assert ctx.router.calls == 0
 
 
+@pytest.mark.parametrize(
+    "phrase",
+    (
+        r"Save this to .test_tmp\contextual_save.docx",
+        r"Save this document to .test_tmp\contextual_save.docx",
+        r"Save the document to .test_tmp\contextual_save.docx",
+        r"Save the file to .test_tmp\contextual_save.docx",
+    ),
+)
+def test_word_save_noun_variants_share_local_context(phrase):
+    ctx = context(state={
+        "command_context": {"current_application": "Microsoft Word"},
+    })
+
+    intent = select_route(phrase, ctx)["intent"]
+
+    assert intent == {
+        "skill": "office_word.save_document",
+        "params": {"path": r".test_tmp\contextual_save.docx"},
+    }
+    assert ctx.router.calls == 0
+
+
 def test_local_command_preempts_research_pending_and_offline_services():
     ctx = context(pending={"kind": "research"})
     route = select_route("Please show me my Downloads folder", ctx)

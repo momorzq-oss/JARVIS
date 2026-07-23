@@ -724,7 +724,7 @@ def classify_local_intent(text, state=None):
             return {"skill": "office_word.insert_text", "params": {"text": supplied}}
 
     save_match = re.match(
-        r"^save(?:\s+(?:it|this|the\s+(?:document|file)))?\s+to\s+(.+)$",
+        r"^save(?:\s+(?:it|(?:this|the)(?:\s+(?:document|file))?))?\s+to\s+(.+)$",
         request, re.I,
     )
     if word_context and save_match:

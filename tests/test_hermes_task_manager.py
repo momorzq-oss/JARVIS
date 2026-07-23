@@ -102,3 +102,31 @@ def test_task_manager_rejects_impossible_pause_and_planning_sequences():
     manager.transition(planning.task_id, "PLANNING")
     with pytest.raises(RuntimeError, match="PLANNING -> COMPLETED"):
         manager.transition(planning.task_id, "COMPLETED")
+
+
+def test_cancel_is_idempotent_and_late_failure_cannot_win():
+    manager = HermesTaskManager(max_concurrent=1)
+    task = manager.create("cancel safely")
+    manager.transition(task.task_id, "RUNNING")
+
+    cancelled = manager.cancel(task.task_id)
+    assert manager.cancel(task.task_id).status == "CANCELLED"
+    with pytest.raises(RuntimeError, match="invalid Hermes task transition"):
+        manager.transition(task.task_id, "FAILED", error="late worker failure")
+
+    stored = manager.get(task.task_id)
+    assert stored.status == "CANCELLED"
+    assert stored.completed_at == cancelled.completed_at
+    assert stored.last_error == ""
+
+
+@pytest.mark.parametrize("terminal", ["COMPLETED", "FAILED"])
+def test_cancel_does_not_mutate_already_terminal_tasks(terminal):
+    manager = HermesTaskManager(max_concurrent=1)
+    task = manager.create("already terminal")
+    manager.transition(task.task_id, "RUNNING")
+    manager.transition(task.task_id, terminal)
+
+    with pytest.raises(RuntimeError, match=f"already {terminal.lower()}"):
+        manager.cancel(task.task_id)
+    assert manager.get(task.task_id).cancellation_token is False

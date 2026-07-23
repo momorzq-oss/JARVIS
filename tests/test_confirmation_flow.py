@@ -214,6 +214,41 @@ def test_concurrent_confirmations_receive_independent_decisions(
     assert executed == ["first"]
 
 
+def test_shutdown_cancels_active_and_queued_confirmations(
+    qapp, confirmation_env,
+):
+    controller, gui = confirmation_env
+    executed = []
+    results = []
+    intent = {"skill": "app.close", "params": {"target": "__all__"}}
+
+    def run(name):
+        results.append(controller.action_manager.execute_intent(
+            intent, lambda: executed.append(name) or "unexpected execution",
+        ))
+
+    first = threading.Thread(target=run, args=("first",), daemon=True)
+    second = threading.Thread(target=run, args=("second",), daemon=True)
+    first.start()
+    deadline = time.time() + 1.0
+    while not gui.confirmation_pending() and time.time() < deadline:
+        time.sleep(0.005)
+    assert gui.confirmation_pending()
+    second.start()
+
+    gui.shutdown()
+    first.join(timeout=1.0)
+    second.join(timeout=1.0)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert executed == []
+    assert sorted(results) == [
+        "Task cancelled by user.",
+        "Task cancelled by user.",
+    ]
+
+
 def test_deny_keeps_action_from_running(qapp, confirmation_env):
     controller, gui = confirmation_env
     result, executed = _run_confirmation(

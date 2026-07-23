@@ -94,7 +94,7 @@ class HermesTaskManager:
                 raise RuntimeError(
                     f"invalid Hermes task transition: {task.status} -> {status}"
                 )
-            if task.cancellation_token and status not in {"CANCELLED", "FAILED"}:
+            if task.cancellation_token and status != "CANCELLED":
                 raise RuntimeError("task is cancelled")
             task.status, task.updated_at = status, time.time()
             if status == "RUNNING" and task.started_at is None:
@@ -114,8 +114,14 @@ class HermesTaskManager:
     def cancel(self, task_id: str) -> HermesTask:
         with self._lock:
             task = self._tasks[task_id]
+            if task.status == "CANCELLED":
+                return self._snapshot(task)
+            if task.status in TERMINAL_TASK_STATUSES:
+                raise RuntimeError(f"task is already {task.status.lower()}")
             task.cancellation_token = True
-        return self.transition(task_id, "CANCELLED")
+            # RLock keeps token and terminal state publication atomic while
+            # transition applies the normal timestamps and notifications.
+            return self.transition(task_id, "CANCELLED")
 
     def record_confirmation(self, task_id: str, decision: str) -> HermesTask:
         with self._lock:

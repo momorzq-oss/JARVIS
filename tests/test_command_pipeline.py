@@ -381,6 +381,16 @@ def test_office_creation_strips_polite_request_scaffolding_consistently():
     assert document["params"]["topic"] == "regional transport"
 
 
+def test_general_word_proposal_does_not_enter_university_mode():
+    intent = select_route(
+        "Create a short Word proposal about employee training.", context(),
+    )["intent"]
+
+    assert intent["skill"] == "office.create_document"
+    assert intent["params"]["document_type"] == "proposal"
+    assert intent["params"]["topic"] == "employee training"
+
+
 def test_exact_office_product_nouns_keep_flexible_creation_verbs():
     spreadsheet = select_route(
         "Prepare an Excel spreadsheet for quarterly expenses", context(),

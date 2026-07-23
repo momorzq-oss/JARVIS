@@ -233,7 +233,7 @@ def classify_assignment_intent(text, state=None):
     # otherwise preserve the verified legacy route exactly.
     overlapping_general_types = {
         "Report", "Research Report", "Research Paper", "Literature Review",
-        "Business Report", "Critical Analysis", "Case Study",
+        "Business Report", "Critical Analysis", "Case Study", "Proposal",
     }
     if detected_type in overlapping_general_types and not academic_signal and not followup:
         return None

@@ -37,6 +37,9 @@ Date: 2026-07-20
 - Excel monthly household budget: created visibly, saved, and verified.
 - PowerPoint AI-in-education presentation: created visibly with ten slides, saved, and verified.
 - All three JARVIS-owned Office sessions closed safely.
+- Generic Word proposal precedence: `Create a short Word proposal about Jarvis office pipeline validation.` used `office.create_document`, not University Assignment Mode, and saved a 13,846-byte DOCX.
+- University proposal precedence: explicit university/citation wording remains routed to University Assignment Mode.
+- Current complete regression result: 600 collected, 600 passed, 0 failed, 0 skipped.
 
 ## Packaged Validation
 

@@ -534,11 +534,18 @@ def _classify_office_creation(request):
             slides=slide_count, mode=_mode(value), save_after_completion=True,
         )
     if any(kind in low for kind in DOCUMENT_TYPES):
-        if re.search(r"\b(?:microsoft\s+)?word\b", low):
+        document_type = _document_type(value)
+        # Preserve the long-established ``word.write`` contract for generic
+        # "Word document about X" requests. Named document types such as a
+        # proposal belong to the unified Office adapter even when Word is
+        # stated explicitly.
+        if document_type == "document" and re.search(
+            r"\b(?:microsoft\s+)?word\b", low,
+        ):
             return None
         return _intent(
             "office.create_document", "CREATE_DOCUMENT",
-            document_type=_document_type(value),
+            document_type=document_type,
             topic=_extract_topic(value, (r"\b(?:about|for|on)\b",)),
             mode=_mode(value), save_after_completion=True,
         )

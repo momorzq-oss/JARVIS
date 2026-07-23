@@ -29,6 +29,15 @@ def test_assignment_type_detection_uses_one_shared_route(phrase, expected):
     assert intent["params"]["assignment_type"] == expected
 
 
+def test_academic_proposal_still_enters_university_mode():
+    intent = classify_assignment_intent(
+        "Write a university proposal about renewable energy using APA 7",
+    )
+
+    assert intent["skill"] == "university.assignment"
+    assert intent["params"]["assignment_type"] == "Proposal"
+
+
 def test_assignment_metadata_extraction():
     data = parse_assignment_request(
         "Write a 2,000-word postgraduate APA 7 literature review about renewable energy, final draft."

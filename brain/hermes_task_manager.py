@@ -53,6 +53,15 @@ class HermesTaskManager:
         self._tasks: dict[str, HermesTask] = {}
         self._lock = threading.RLock()
         self._changed = threading.Condition(self._lock)
+        self._last_timestamp = 0.0
+
+    def _timestamp(self) -> float:
+        """Return a wall-clock timestamp that is ordered within this manager."""
+        value = time.time()
+        if value <= self._last_timestamp:
+            value = self._last_timestamp + 0.000001
+        self._last_timestamp = value
+        return value
 
     @staticmethod
     def _snapshot(task: HermesTask) -> HermesTask:
@@ -71,7 +80,11 @@ class HermesTaskManager:
                          for t in self._tasks.values())
             if active >= self.max_concurrent:
                 raise RuntimeError("Hermes task concurrency limit reached")
-            task = HermesTask(task_id=str(uuid.uuid4()), goal=str(goal), owner=owner)
+            created_at = self._timestamp()
+            task = HermesTask(
+                task_id=str(uuid.uuid4()), goal=str(goal), owner=owner,
+                created_at=created_at, updated_at=created_at,
+            )
             self._tasks[task.task_id] = task
             self._changed.notify_all()
             return self._snapshot(task)
@@ -109,7 +122,7 @@ class HermesTaskManager:
                 )
             if task.cancellation_token and status != "CANCELLED":
                 raise RuntimeError("task is cancelled")
-            task.status, task.updated_at = status, time.time()
+            task.status, task.updated_at = status, self._timestamp()
             if status == "RUNNING" and task.started_at is None:
                 task.started_at = task.updated_at
             if status in TERMINAL_TASK_STATUSES:
@@ -146,7 +159,7 @@ class HermesTaskManager:
             if task.confirmations:
                 raise RuntimeError("task confirmation is already recorded")
             task.confirmations.append(str(decision))
-            task.updated_at = time.time()
+            task.updated_at = self._timestamp()
             self._changed.notify_all()
             return self._snapshot(task)
 
@@ -159,7 +172,7 @@ class HermesTaskManager:
                 raise RuntimeError("Hermes task retry limit reached")
             task.retries += 1
             task.last_error = str(error)
-            task.updated_at = time.time()
+            task.updated_at = self._timestamp()
             self._changed.notify_all()
             return self._snapshot(task)
 
@@ -185,7 +198,7 @@ class HermesTaskManager:
                 value = str(path)
                 if value and value not in task.output_files:
                     task.output_files.append(value)
-            task.updated_at = time.time()
+            task.updated_at = self._timestamp()
             self._changed.notify_all()
             return self._snapshot(task)
 

@@ -177,3 +177,13 @@ def test_completed_task_clears_recovered_retry_error():
     manager.complete_step(task.task_id, "browser.read_page", "SAFE_READ")
     completed = manager.transition(task.task_id, "COMPLETED")
     assert completed.last_error == ""
+
+
+def test_manager_timestamps_remain_strictly_ordered_on_coarse_clock(monkeypatch):
+    monkeypatch.setattr("brain.hermes_task_manager.time.time", lambda: 100.0)
+    manager = HermesTaskManager(max_concurrent=2)
+    first = manager.create("first")
+    second = manager.create("second")
+    updated = manager.transition(first.task_id, "RUNNING", steps=1)
+
+    assert first.created_at < second.created_at < updated.updated_at

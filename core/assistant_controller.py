@@ -242,12 +242,12 @@ class AssistantController:
             hermes = hermes_health(self.hermes_adapter)
             snap["hermes"] = hermes["status"]
             snap["hermes_detail"] = hermes["detail"]
-            hermes_tasks = [task.__dict__.copy() for task in self.hermes_tasks.list()]
+            hermes_task_records = self.hermes_tasks.list()
+            hermes_tasks = [task.__dict__.copy() for task in hermes_task_records]
             snap["hermes_tasks"] = hermes_tasks
-            active_hermes = next((task for task in hermes_tasks if task["status"] not in {"COMPLETED", "FAILED", "CANCELLED"}), None)
-            displayed_hermes = active_hermes or (
-                max(hermes_tasks, key=lambda item: item.get("updated_at", 0))
-                if hermes_tasks else None
+            displayed_record = self._pick_current_hermes_task(hermes_task_records)
+            displayed_hermes = (
+                displayed_record.__dict__.copy() if displayed_record else None
             )
             snap["hermes_task"] = displayed_hermes["goal"] if displayed_hermes else "Unavailable"
             snap["hermes_task_status"] = displayed_hermes["status"] if displayed_hermes else "IDLE"
@@ -527,12 +527,8 @@ class AssistantController:
         if not tasks:
             return None
         value = str(selector or "current").strip().lower()
-        active = [
-            task for task in tasks
-            if task.status not in {"COMPLETED", "FAILED", "CANCELLED"}
-        ]
         if value in {"", "current", "active", "running", "latest", "last"}:
-            return (active or tasks)[-1]
+            return self._pick_current_hermes_task(tasks)
         numbers = {
             "one": 1, "first": 1, "two": 2, "second": 2,
             "three": 3, "third": 3, "four": 4, "fourth": 4,
@@ -545,6 +541,30 @@ class AssistantController:
             return tasks[index - 1]
         exact = next((task for task in tasks if task.task_id == value), None)
         return exact
+
+    @staticmethod
+    def _pick_current_hermes_task(tasks):
+        """Select the one task Mission Control and `current` commands share."""
+        tasks = list(tasks or [])
+        if not tasks:
+            return None
+        active = [
+            task for task in tasks
+            if task.status not in {"COMPLETED", "FAILED", "CANCELLED"}
+        ]
+        if active:
+            return max(
+                enumerate(active),
+                key=lambda item: (
+                    item[1].created_at, item[1].updated_at, item[0],
+                ),
+            )[1]
+        return max(
+            enumerate(tasks),
+            key=lambda item: (
+                item[1].updated_at, item[1].created_at, item[0],
+            ),
+        )[1]
 
     def _hermes_status_text(self):
         snapshot = self.status_snapshot()

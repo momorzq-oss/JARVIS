@@ -654,6 +654,52 @@ def test_hermes_task_controls_change_only_selected_task(monkeypatch):
     assert ctl.hermes_tasks.get(second.task_id).status == "CANCELLED"
 
 
+def test_mission_control_and_current_command_select_same_latest_active_task():
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    first = ctl.hermes_tasks.create("older running goal")
+    ctl.hermes_tasks.transition(first.task_id, "RUNNING", steps=1)
+    second = ctl.hermes_tasks.create("newer approval goal")
+    ctl.hermes_tasks.transition(
+        second.task_id, "WAITING_CONFIRMATION", steps=1,
+    )
+    ctl._hermes_pending_plans[second.task_id] = (
+        object(),
+        {
+            "summary": "Approve the newer plan",
+            "steps": [{"capability_id": "browser.read_page"}],
+        },
+    )
+
+    snapshot = ctl.status_snapshot()
+
+    assert ctl._select_hermes_task("current").task_id == second.task_id
+    assert snapshot["hermes_task"] == "newer approval goal"
+    assert snapshot["hermes_task_status"] == "WAITING_CONFIRMATION"
+    assert snapshot["hermes_plan_summary"] == "Approve the newer plan"
+    assert snapshot["hermes_approval_pending"] is True
+
+
+def test_current_task_falls_back_to_most_recently_updated_terminal_task():
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    first = ctl.hermes_tasks.create("older created, newer completed")
+    ctl.hermes_tasks.transition(first.task_id, "RUNNING", steps=1)
+    second = ctl.hermes_tasks.create("newer created, older completed")
+    ctl.hermes_tasks.transition(second.task_id, "RUNNING", steps=1)
+    ctl.hermes_tasks.complete_step(
+        second.task_id, "browser.read_page", "SAFE_READ",
+    )
+    ctl.hermes_tasks.transition(second.task_id, "COMPLETED")
+    ctl.hermes_tasks.complete_step(
+        first.task_id, "browser.read_page", "SAFE_READ",
+    )
+    ctl.hermes_tasks.transition(first.task_id, "COMPLETED")
+
+    snapshot = ctl.status_snapshot()
+
+    assert ctl._select_hermes_task("current").task_id == first.task_id
+    assert snapshot["hermes_task"] == "older created, newer completed"
+
+
 def test_planning_task_cancel_stops_exact_adapter_request(monkeypatch):
     ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
     task = ctl.hermes_tasks.create("planning goal")

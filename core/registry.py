@@ -327,11 +327,14 @@ class SessionRegistry:
 
         # 3) native window handle (preferred for Explorer ownership)
         hwnd = entry.get("hwnd") or entry.get("window_handle")
+        window_close_failed = False
         if hwnd:
             try:
                 import ctypes
                 WM_CLOSE = 0x0010
                 user32 = ctypes.windll.user32
+                if _native_window_closed(user32, hwnd):
+                    return True
                 if user32.IsWindow(int(hwnd)):
                     user32.PostMessageW(int(hwnd), WM_CLOSE, 0, 0)
                     import time
@@ -339,13 +342,22 @@ class SessionRegistry:
                     while (time.time() < deadline
                            and not _native_window_closed(user32, hwnd)):
                         time.sleep(0.05)
-                    return _native_window_closed(user32, hwnd)
+                    if _native_window_closed(user32, hwnd):
+                        return True
+                    window_close_failed = True
             except Exception:
-                pass
+                window_close_failed = True
 
-        # 4) kill by PID
+        # 4) terminate the exact PID only when it is a dedicated process that
+        # did not exist before JARVIS opened the verified window. Explorer,
+        # ApplicationFrameHost, and reused Office/browser processes must never
+        # be killed just because one owned HWND ignored WM_CLOSE.
         pid = entry.get("pid")
-        if pid:
+        extra = entry.get("extra") or {}
+        explicit_termination = str(
+            extra.get("terminate_pid_on_close", "")
+        ).strip().lower() in {"1", "true", "yes"}
+        if pid and (not hwnd or explicit_termination):
             try:
                 import psutil
                 proc = psutil.Process(int(pid))
@@ -357,6 +369,11 @@ class SessionRegistry:
                 return True
             except Exception:
                 pass
+
+        # An exact owned window that resisted its bounded close attempt is not
+        # a licence to fuzzy-close another window by title or process name.
+        if hwnd or window_close_failed:
+            return False
 
         # 5) close by window title
         title = entry.get("window_title") or entry.get("name")

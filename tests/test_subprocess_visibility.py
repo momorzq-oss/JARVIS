@@ -105,6 +105,36 @@ def test_redirected_application_registers_verified_window_pid(monkeypatch):
     assert metadata["window_title"] == "Untitled - Notepad"
     assert metadata["extra"]["launcher_pid"] == 42
     assert metadata["extra"]["verified_window"] is True
+    assert metadata["extra"]["terminate_pid_on_close"] is True
+
+
+def test_application_window_verification_ignores_hidden_launcher(monkeypatch):
+    hidden = SimpleNamespace(title="Calculator", _hWnd=1001)
+    visible = SimpleNamespace(title="Calculator", _hWnd=1002)
+    monkeypatch.setattr("pygetwindow.getAllWindows", lambda: [hidden, visible])
+    monkeypatch.setattr(system_control, "_matching_process_ids", lambda _value: {21, 22})
+    monkeypatch.setattr(system_control, "_window_pid", lambda hwnd: {1001: 21, 1002: 22}[hwnd])
+    monkeypatch.setattr(system_control, "_effective_window_pid", lambda _hwnd, pid: pid)
+    monkeypatch.setattr(system_control, "_native_window_visible", lambda hwnd: hwnd == 1002)
+
+    target = SimpleNamespace(value="calc.exe", name="Calculator")
+    assert system_control._verify_launched_app(target, set(), set(), timeout=0.1) == (
+        22, 1002, "Calculator",
+    )
+
+
+def test_application_window_verification_uses_hosted_app_pid(monkeypatch):
+    window = SimpleNamespace(title="Calculator", _hWnd=1002)
+    monkeypatch.setattr("pygetwindow.getAllWindows", lambda: [window])
+    monkeypatch.setattr(system_control, "_matching_process_ids", lambda _value: set())
+    monkeypatch.setattr(system_control, "_window_pid", lambda _hwnd: 30)
+    monkeypatch.setattr(system_control, "_effective_window_pid", lambda _hwnd, _pid: 31)
+    monkeypatch.setattr(system_control, "_native_window_visible", lambda _hwnd: True)
+
+    target = SimpleNamespace(value="calc.exe", name="Calculator")
+    assert system_control._verify_launched_app(target, set(), set(), timeout=0.1) == (
+        31, 1002, "Calculator",
+    )
 
 
 def test_unverified_application_launch_is_not_registered(monkeypatch):

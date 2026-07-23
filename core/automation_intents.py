@@ -421,6 +421,27 @@ def _strip_request_scaffolding(text):
     return re.sub(r"\s+", " ", value).strip()
 
 
+def _extract_explicit_windows_path(text):
+    """Return a literal drive or UNC path embedded in command prose.
+
+    A path is more specific than aliases contained inside it (such as
+    ``OneDrive``). Existence and target-type validation still belongs to the
+    Windows resolver at execution time.
+    """
+    value = str(text or "").strip()
+    quoted = re.search(
+        r"[\"']((?:[A-Za-z]:\\|\\\\)[^\"']+)[\"']", value,
+    )
+    if quoted:
+        return quoted.group(1).strip()
+    unquoted = re.search(r"(?<![A-Za-z0-9_])((?:[A-Za-z]:\\|\\\\).+)$", value)
+    if not unquoted:
+        return ""
+    path = unquoted.group(1).strip()
+    path = re.sub(r"\s+(?:please|for me)\s*$", "", path, flags=re.I)
+    return path.rstrip(" .!?;,\t\r\n")
+
+
 def _research_topic(text, state=None):
     """Extract a research subject while excluding output/mode instructions."""
     value = str(text or "").strip()
@@ -591,6 +612,12 @@ def classify_local_intent(text, state=None):
         r"\btake me to\b", low,
     ))
     if openish:
+        explicit_path = _extract_explicit_windows_path(request)
+        if explicit_path:
+            requested_skill = "app.open_folder" if re.search(
+                r"\b(?:folder|directory)\b", low,
+            ) else "app.open_file" if re.search(r"\bfile\b", low) else "app.open"
+            return {"skill": requested_skill, "params": {"target": explicit_path}}
         for alias in sorted(FOLDER_ALIASES, key=len, reverse=True):
             if re.search(rf"\b{re.escape(alias)}\b(?:\s+(?:folder|directory))?", low):
                 return {"skill": "app.open_folder", "params": {"target": FOLDER_ALIASES[alias]}}

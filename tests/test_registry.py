@@ -81,3 +81,30 @@ def test_hidden_appframe_counts_as_closed_without_killing_shared_host():
             return False
 
     assert _native_window_closed(User32(), 1001) is True
+
+
+def test_verified_window_failure_does_not_fallback_to_pid_or_title(tmp_path, monkeypatch):
+    registry = SessionRegistry(tmp_path / "registry.json")
+    entry = registry.register(
+        "app", "Calculator", pid=999999, hwnd=999999,
+        window_title="Calculator",
+        extra={"terminate_pid_on_close": False},
+    )
+    monkeypatch.setattr(
+        "psutil.Process",
+        lambda _pid: (_ for _ in ()).throw(AssertionError("PID fallback used")),
+    )
+    monkeypatch.setattr(
+        "pygetwindow.getWindowsWithTitle",
+        lambda _title: (_ for _ in ()).throw(AssertionError("title fallback used")),
+    )
+    monkeypatch.setattr("core.registry._native_window_closed", lambda *_args: False)
+
+    assert registry._close_entry(entry) is False
+
+
+def test_already_closed_verified_window_is_successful_cleanup(tmp_path, monkeypatch):
+    registry = SessionRegistry(tmp_path / "registry.json")
+    entry = registry.register("app", "Calculator", pid=None, hwnd=999999)
+
+    assert registry._close_entry(entry) is True

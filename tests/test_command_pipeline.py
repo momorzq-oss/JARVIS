@@ -159,6 +159,24 @@ def test_folder_and_application_aliases_share_one_route(phrase, skill):
     assert ctx.router.calls == 0
 
 
+def test_explicit_windows_folder_path_outranks_alias_inside_path():
+    path = r"C:\Users\Burab\OneDrive\Desktop\JARVIS\.test_tmp\folder probe"
+    route = select_route(f"Please show me the folder {path}", context())
+
+    assert route["intent"] == {
+        "skill": "app.open_folder", "params": {"target": path},
+    }
+
+
+def test_quoted_windows_folder_path_preserves_spaces():
+    path = r"C:\Users\Burab\OneDrive\Desktop\Course Work"
+    route = select_route(f'Open the folder "{path}" for me', context())
+
+    assert route["intent"] == {
+        "skill": "app.open_folder", "params": {"target": path},
+    }
+
+
 BROWSER_PHRASES = [
     ("Open browser", "browser.open"),
     ("I need to browse the web", "browser.open"),

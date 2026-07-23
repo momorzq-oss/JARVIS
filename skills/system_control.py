@@ -175,6 +175,17 @@ def _window_pid(hwnd):
         return None
 
 
+def _native_window_visible(hwnd):
+    """Reject hidden launcher/IME windows during ownership verification."""
+    if not hwnd or os.name != "nt":
+        return bool(hwnd)
+    try:
+        user32 = ctypes.windll.user32
+        return bool(user32.IsWindow(int(hwnd)) and user32.IsWindowVisible(int(hwnd)))
+    except Exception:
+        return False
+
+
 def _native_process_name(pid):
     """Return a process image basename without importing process libraries.
 
@@ -219,6 +230,43 @@ def _native_process_name(pid):
         kernel32.CloseHandle(handle)
 
 
+def _effective_window_pid(hwnd, fallback_pid=None):
+    """Resolve the dedicated app PID behind a hosted top-level window.
+
+    Store applications place a visible ``ApplicationFrameWindow`` in the
+    shared ApplicationFrameHost process while the real application owns a
+    visible ``Windows.UI.Core.CoreWindow`` child. Tracking the shared host
+    makes safe close verification impossible, so unwrap only this documented
+    hosted-window shape and retain the top-level HWND for exact closing.
+    """
+    if os.name != "nt" or not hwnd:
+        return fallback_pid
+    if _native_process_name(fallback_pid).lower() != "applicationframehost.exe":
+        return fallback_pid
+    from ctypes import wintypes
+
+    candidates = []
+    callback_type = ctypes.WINFUNCTYPE(
+        wintypes.BOOL, wintypes.HWND, wintypes.LPARAM,
+    )
+
+    def visit(child, _parameter):
+        if ctypes.windll.user32.IsWindowVisible(child):
+            child_pid = _window_pid(child)
+            if child_pid and child_pid != fallback_pid:
+                class_buffer = ctypes.create_unicode_buffer(256)
+                ctypes.windll.user32.GetClassNameW(child, class_buffer, 256)
+                candidates.append((child_pid, class_buffer.value))
+        return True
+
+    callback = callback_type(visit)
+    ctypes.windll.user32.EnumChildWindows(int(hwnd), callback, 0)
+    for child_pid, class_name in candidates:
+        if class_name == "Windows.UI.Core.CoreWindow":
+            return child_pid
+    return fallback_pid
+
+
 def _verify_launched_app(target, existing_hwnds, existing_pids, timeout=7.0):
     """Resolve the real surviving GUI window after Windows launch redirection.
 
@@ -244,9 +292,17 @@ def _verify_launched_app(target, existing_hwnds, existing_pids, timeout=7.0):
         for window in gw.getAllWindows():
             title = str(getattr(window, "title", "") or "").strip()
             hwnd = getattr(window, "_hWnd", None)
-            if not title or not hwnd or hwnd in existing_hwnds:
+            if (not title or not hwnd or hwnd in existing_hwnds
+                    or not _native_window_visible(hwnd)):
                 continue
-            pid = _window_pid(hwnd)
+            host_pid = _window_pid(hwnd)
+            pid = _effective_window_pid(hwnd, host_pid)
+            # A Store frame becomes visible slightly before its real app
+            # CoreWindow is attached. Keep polling rather than recording the
+            # shared host as the application owner.
+            if (_native_process_name(host_pid).lower() == "applicationframehost.exe"
+                    and pid == host_pid):
+                continue
             title_low = title.lower()
             title_matches = bool(target_words) and any(
                 word in title_low for word in target_words
@@ -383,6 +439,12 @@ def _launch_resolved(target, ctx):
             except Exception:
                 pass
             existing_pids = _matching_process_ids(target.value)
+            existing_window_pids = {
+                pid for pid in (
+                    _effective_window_pid(hwnd, _window_pid(hwnd))
+                    for hwnd in existing_hwnds
+                ) if pid
+            }
             proc = subprocess.Popen([target.value], shell=False,
                                     stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL,
@@ -393,13 +455,20 @@ def _launch_resolved(target, ctx):
             if verified is None:
                 return None
             pid, hwnd, window_title = verified
+            actual_process_name = _native_process_name(pid) or Path(target.value).name
+            terminate_pid_on_close = (
+                pid not in existing_pids
+                and pid not in existing_window_pids
+                and actual_process_name.lower() != "applicationframehost.exe"
+            )
             ctx.registry.register("app", target.name, pid=pid, hwnd=hwnd,
                                   window_title=window_title,
                                   exe_path=target.value,
                                   extra={
-                                      "process_name": Path(target.value).name,
+                                      "process_name": actual_process_name,
                                       "launcher_pid": proc.pid,
                                       "verified_window": True,
+                                      "terminate_pid_on_close": terminate_pid_on_close,
                                   })
             return f"Opening {target.name}."
         except OSError:

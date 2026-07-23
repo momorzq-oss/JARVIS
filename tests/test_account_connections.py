@@ -8,7 +8,7 @@ class FakePage:
 
     @staticmethod
     def query_selector(selector):
-        return object() if "body" in selector else None
+        return object() if "div[role='main']" in selector else None
 
 
 class FakeBrowser:
@@ -32,6 +32,26 @@ def test_gmail_verification_records_non_secret_connection_state(monkeypatch, tmp
     assert result["connected"] is True
     assert "verified" in result["detail"].lower()
     assert "token" not in (tmp_path / "accounts.json").read_text(encoding="utf-8").lower()
+
+
+def test_gmail_verification_rejects_generic_signed_out_mail_page(monkeypatch, tmp_path):
+    monkeypatch.setattr("core.account_connections.CONNECTION_FILE", tmp_path / "accounts.json")
+
+    class SignedOutPage:
+        url = "https://mail.google.com/mail/u/0/"
+
+        @staticmethod
+        def query_selector(selector):
+            return object() if "body" in selector else None
+
+    class SignedOutContext:
+        browser = FakeBrowser()
+
+    SignedOutContext.browser._context.pages = [SignedOutPage()]
+    result = AccountConnectionManager(SignedOutContext()).verify("gmail")
+
+    assert result["connected"] is False
+    assert result["state"] == "NOT CONNECTED"
 
 
 def test_unknown_account_is_rejected(monkeypatch, tmp_path):

@@ -169,8 +169,10 @@ class AccountConnectionManager:
         try:
             if page.query_selector("input[type='email'], input[name='identifier']"):
                 return False
-            # Gmail's inbox shell is present even for an empty inbox.
-            return bool(page.query_selector("div[role='main'], div[gh='tm'], body"))
+            # Require Gmail-owned inbox chrome.  A generic ``body`` exists on
+            # both signed-in and signed-out mail.google.com pages and used to
+            # create a false CONNECTED state before Google login completed.
+            return bool(page.query_selector("div[role='main'], div[gh='tm']"))
         except Exception:
             return False
 

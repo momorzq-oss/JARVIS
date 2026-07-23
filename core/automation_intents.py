@@ -424,7 +424,9 @@ def _strip_request_scaffolding(text):
         r"i(?:'d| would)?\s+like\s+you\s+to\s+|i\s+(?:need|want)\s+(?:you\s+)?to\s+)*",
         "", value, flags=re.I,
     )
-    value = re.sub(r"\s+(?:please|for me)\s*$", "", value, flags=re.I)
+    value = re.sub(
+        r"[\s,;:-]+(?:please|for me)[\s.!?,;:-]*$", "", value, flags=re.I,
+    )
     return re.sub(r"\s+", " ", value).strip()
 
 

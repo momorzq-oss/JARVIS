@@ -226,6 +226,7 @@ def test_browser_and_search_phrasings_share_one_route(phrase, skill):
 CLOSE_PHRASES = [
     ("Close it", "app.close"),
     ("Close it again", "app.close"),
+    ("Close it again, please.", "app.close"),
     ("Close that now please", "app.close"),
     ("Could you close the application?", "app.close"),
     ("Close Word", "app.close"),
@@ -284,7 +285,13 @@ def test_recent_folder_followups_resolve_to_owned_resource_sentinel(phrase):
     assert ctx.state["command_context"]["current_application"] == ""
 
 
-@pytest.mark.parametrize("phrase", ("Close it", "Close it again", "Close that now please"))
+@pytest.mark.parametrize(
+    "phrase",
+    (
+        "Close it", "Close it again", "Close it again, please.",
+        "Close that now please", "Would you close that for me?",
+    ),
+)
 def test_contextual_close_modifiers_resolve_to_recent_owned_folder(phrase):
     ctx = context(state={"command_context": {
         "current_folder": "Downloads",

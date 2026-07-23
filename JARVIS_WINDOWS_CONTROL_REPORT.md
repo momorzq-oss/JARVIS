@@ -41,3 +41,6 @@ Downloads uses the Windows Known Folder API first and `%USERPROFILE%\Downloads` 
 - Browser: real YouTube page loaded; context closed; registry empty.
 - Close all: five owned entries closed; all pre-existing visible Notepad and Chrome HWNDs remained alive.
 
+## 2026-07-23 Contextual Close Regression
+
+The shared request scaffold now removes trailing polite suffixes even when punctuation separates them from the command. A live request opened one new Downloads Explorer HWND; `Close it again, please.` resolved to `__recent_folder__` and closed only that owned window. The pre-existing shell window and user Word and Chrome sessions remained alive. Automated coverage includes the same route plus `Would you close that for me?` and reports 595 collected, 595 passed, 0 failed, and 0 skipped.

@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from config import Config
+from core.live_task import TaskCancelled
 
 
 @dataclasses.dataclass
@@ -215,6 +216,15 @@ class WordAdapter(DesktopApplicationAdapter):
                 "success", self.application, "create_document",
                 f"Created and verified {path.name}. Word remains open for review.",
                 str(path), True,
+            )
+        except TaskCancelled:
+            try:
+                service.close(save=False)
+            except Exception:
+                pass
+            return DesktopActionResult(
+                "cancelled", self.application, "create_document",
+                "Word document creation was cancelled.",
             )
         except Exception as exc:
             if task is not None:
@@ -490,6 +500,10 @@ class DesktopAutomationService:
         skill = intent.get("skill", "")
         params = dict(intent.get("params", {}) or {})
         intent_group = params.pop("intent_group", skill)
+        # The command field is execution identity, not ambient UI state. A
+        # pause/resume command may update ``last_command_text`` while this
+        # slower action is still running, so bind the initiating command now.
+        initiating_command = self.ctx.state.get("last_command_text", "")
         active_website = str(self.ctx.state.get("active_website", "")).lower()
         if skill == "office.create_document" and active_website == "google docs":
             adapter = self.ctx.website_adapters.get("google docs")
@@ -530,5 +544,5 @@ class DesktopAutomationService:
         self.logger.write(intent=intent_group, application=result.application,
                           action=result.action, result=result.message,
                           error=result.error, file_path=result.file_path,
-                          command=self.ctx.state.get("last_command_text", ""))
+                          command=initiating_command)
         return result.message if result.status == "success" else f"{result.message} {result.error}".strip()

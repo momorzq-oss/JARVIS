@@ -218,9 +218,20 @@ def classify_assignment_intent(text, state=None):
     current = state.get("university_assignment") if isinstance(state, dict) else None
     detected_type = _assignment_type(request)
     strong_type = bool(detected_type)
+    # Academic words inside the subject do not make an ordinary Office file
+    # an assignment. Keep directive evidence such as "university proposal"
+    # or "using APA", but exclude the extracted topic before checking mode.
+    signal_request = request
+    detected_topic = _topic(request)
+    if detected_topic:
+        signal_request = re.sub(
+            re.escape(detected_topic), " ", signal_request,
+            count=1, flags=re.I,
+        )
     academic_signal = bool(re.search(
         r"\b(?:university|academic|assignment|rubric|marking criteria|citation|"
-        r"harvard|apa|mla|chicago|ieee|vancouver|oscola)\b", request, re.I
+        r"harvard|apa|mla|chicago|ieee|vancouver|oscola)\b",
+        signal_request, re.I,
     ))
     followup = bool(current and re.search(
         r"\b(?:make it|use harvard|use apa|add more sources|rewrite the|continue with|"

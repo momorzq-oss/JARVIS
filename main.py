@@ -233,6 +233,11 @@ def _dispatch_registered(intent, ctx):
     if skill == "system.emergency_stop":
         # Signal cancellation and silence output before any optional subsystem
         # cleanup.  Emergency stop must not wait behind browser or UI work.
+        state = getattr(ctx, "state", None)
+        if isinstance(state, dict):
+            state["emergency_stop_generation"] = int(
+                state.get("emergency_stop_generation", 0) or 0
+            ) + 1
         try:
             ctx.speaker.stop()
         except Exception:
@@ -452,6 +457,13 @@ def handle_utterance(text, ctx):
     text = cleanup_command(text)
     if not text:
         return None
+    command_stop_generation = int(
+        ctx.state.get("emergency_stop_generation", 0) or 0
+    )
+
+    def speech_allowed():
+        return int(ctx.state.get("emergency_stop_generation", 0) or 0) == command_stop_generation
+
     ctx.state["last_command_text"] = text
     log("heard", f"user input received ({len(text)} characters)", "cyan")
 
@@ -475,13 +487,16 @@ def handle_utterance(text, ctx):
         if handled:
             if spoken:
                 log("result", f"pending response generated ({len(spoken)} characters)", "green")
-                ctx.speaker.speak(spoken)
+                if speech_allowed():
+                    ctx.speaker.speak(spoken)
             return spoken
 
     plan = route.get("plan") or []
     if route["route_type"] == "plan" and plan:
         results = []
         for index, planned_intent in enumerate(plan, 1):
+            if not speech_allowed():
+                break
             log(
                 "plan",
                 f"{index}/{len(plan)} {planned_intent.get('skill')} "
@@ -495,6 +510,8 @@ def handle_utterance(text, ctx):
                     f"{index}/{len(plan)} {planned_intent}",
                 )
             result = dispatch(planned_intent, ctx)
+            if not speech_allowed():
+                break
             if result:
                 results.append(result)
                 log("result", f"step response generated ({len(result)} characters)", "green")
@@ -505,7 +522,7 @@ def handle_utterance(text, ctx):
                 )):
                     break
         spoken = " ".join(results)
-        if spoken:
+        if spoken and speech_allowed():
             ctx.speaker.speak(spoken)
         return spoken
 
@@ -523,7 +540,7 @@ def handle_utterance(text, ctx):
         # Keep emergency stop silent after dispatch has cancelled playback.
         # Its completion remains available to the GUI via the returned text;
         # starting Piper again here would undo the user's stop request.
-        if intent.get("skill") != "system.emergency_stop":
+        if intent.get("skill") != "system.emergency_stop" and speech_allowed():
             ctx.speaker.speak(spoken)
     return spoken
 

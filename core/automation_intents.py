@@ -406,6 +406,10 @@ def _extract_topic(text, markers):
                 r"(?:word|excel|power\s*point)\s*$",
                 "", topic, flags=re.I,
             )
+            topic = re.sub(
+                r"\s+(?:visibly|live|while\s+i\s+watch|so\s+i\s+can\s+watch)\s*$",
+                "", topic, flags=re.I,
+            )
             return topic.strip(" .")
     return ""
 
@@ -693,8 +697,18 @@ def classify_local_intent(text, state=None):
         r"reliable (?:information|sources)|source-grounded|cited|citations?)\b|"
         r"\blook\s+into\b", low,
     ))
-    report_signal = bool(re.search(r"\b(?:report|paper|document|brief|findings)\b", low))
-    research_output_signal = bool(re.search(r"\b(?:report|paper|brief|findings)\b", low))
+    report_signal = bool(re.search(
+        r"\b(?:report|paper|document|findings|briefing)\b|"
+        r"\b(?:executive|policy|research)\s+brief\b|"
+        r"\bbrief\b(?=\s+(?:about|on|regarding)\b)",
+        low,
+    ))
+    research_output_signal = bool(re.search(
+        r"\b(?:report|paper|findings|briefing)\b|"
+        r"\b(?:executive|policy|research)\s+brief\b|"
+        r"\bbrief\b(?=\s+(?:about|on|regarding)\b)",
+        low,
+    ))
     creation_signal = bool(re.search(
         r"\b(?:create|make|write|prepare|produce|draft|build|put together)\b", low,
     ))

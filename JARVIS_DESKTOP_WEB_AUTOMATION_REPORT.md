@@ -39,7 +39,7 @@ Date: 2026-07-20
 - All three JARVIS-owned Office sessions closed safely.
 - Generic Word proposal precedence: `Create a short Word proposal about Jarvis office pipeline validation.` used `office.create_document`, not University Assignment Mode, and saved a 13,846-byte DOCX.
 - University proposal precedence: explicit university/citation wording remains routed to University Assignment Mode.
-- Current complete regression result: 616 collected, 616 passed, 0 failed, 0 skipped.
+- Current complete regression result: 624 collected, 624 passed, 0 failed, 0 skipped.
 
 On 2026-07-23, `Start a new research project about grid-scale battery storage.` exposed a shared routing gap and fell to chat. Interactive research-project/session phrasing now maps deterministically to `research.start`. The exact live request created the research session, retained its topic, produced an outline on follow-up, correctly reported that no sources had yet been gathered, and exited research mode cleanly. Equivalent `begin a research session` and `let's create a new research project` variants have regression coverage.
 

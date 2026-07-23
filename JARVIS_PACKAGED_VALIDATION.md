@@ -78,7 +78,7 @@ Final release classification: **NOT READY** pending human voice validation. Do n
 - Existing candidate hash remained `6EE9379F43F44C5EEE369768FBE159CC6CEF35A5A862E1B6FB383CDAE9D64461`.
 - Existing candidate startup initially displayed the truthful `JARVIS · Starting` shell, became responsive, completed bundled Piper greeting playback, and completed one typed time-response playback.
 - Neither executable nor release directory was modified, promoted, or overwritten.
-- The current source suite reports 616 collected, 616 passed, 0 failed, and 0 skipped.
+- The current source suite reports 624 collected, 624 passed, 0 failed, and 0 skipped.
 
 Current production classification: **NOT READY**. Existing candidate classification: **AUDIO PASS, STILL UNPROMOTED** pending the remaining Hermes and full candidate gates.
 

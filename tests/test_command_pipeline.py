@@ -424,6 +424,40 @@ def test_general_word_proposal_does_not_enter_university_mode():
     assert intent["params"]["topic"] == "employee training"
 
 
+def test_university_topic_proposal_stays_in_general_office_route():
+    intent = select_route(
+        "Create a detailed proposal about university student support visibly in Word.",
+        context(),
+    )["intent"]
+
+    assert intent["skill"] == "office.create_document"
+    assert intent["params"]["document_type"] == "proposal"
+    assert intent["params"]["topic"] == "university student support"
+    assert intent["params"]["mode"] == "structured"
+
+
+def test_brief_adjective_does_not_turn_proposal_into_research_report():
+    intent = select_route(
+        "Create a brief proposal about campus mentoring visibly in Word.",
+        context(),
+    )["intent"]
+
+    assert intent["skill"] == "office.create_document"
+    assert intent["params"]["document_type"] == "proposal"
+    assert intent["params"]["topic"] == "campus mentoring"
+    assert intent["params"]["mode"] == "structured"
+
+
+def test_brief_noun_still_routes_to_short_research_document():
+    intent = select_route(
+        "Create a brief about campus mentoring live in Word.", context(),
+    )["intent"]
+
+    assert intent["skill"] == "office_word.create_research_document"
+    assert intent["params"]["topic"] == "campus mentoring"
+    assert intent["params"]["report_length"] == "short"
+
+
 def test_exact_office_product_nouns_keep_flexible_creation_verbs():
     spreadsheet = select_route(
         "Prepare an Excel spreadsheet for quarterly expenses", context(),
@@ -540,6 +574,29 @@ def test_emergency_stop_completion_is_visual_but_does_not_restart_speech(monkeyp
     result = main_mod.handle_utterance("Emergency stop", fake_ctx)
 
     assert result.startswith("Emergency stop completed")
+    assert spoken == []
+
+
+def test_emergency_stop_suppresses_late_response_from_active_command(monkeypatch):
+    import main as main_mod
+
+    spoken = []
+    fake_ctx = context(state={"emergency_stop_generation": 0})
+    fake_ctx.speaker = SimpleNamespace(
+        speak=lambda text, block=False: spoken.append(text),
+        stop=lambda: None,
+        speaking=False,
+    )
+
+    def interrupted_dispatch(_intent, routed_ctx):
+        routed_ctx.state["emergency_stop_generation"] += 1
+        return "The interrupted task was cancelled."
+
+    monkeypatch.setattr(main_mod, "dispatch", interrupted_dispatch)
+
+    result = main_mod.handle_utterance("Open Notepad", fake_ctx)
+
+    assert result == "The interrupted task was cancelled."
     assert spoken == []
 
 

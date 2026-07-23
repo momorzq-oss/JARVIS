@@ -38,6 +38,17 @@ def test_academic_proposal_still_enters_university_mode():
     assert intent["params"]["assignment_type"] == "Proposal"
 
 
+@pytest.mark.parametrize(
+    "phrase",
+    (
+        "Create a detailed proposal about university student support visibly in Word.",
+        "Write a proposal about university admissions strategy.",
+    ),
+)
+def test_university_inside_proposal_topic_does_not_enable_assignment_mode(phrase):
+    assert classify_assignment_intent(phrase) is None
+
+
 def test_assignment_metadata_extraction():
     data = parse_assignment_request(
         "Write a 2,000-word postgraduate APA 7 literature review about renewable energy, final draft."

@@ -3,8 +3,10 @@ from types import SimpleNamespace
 import pytest
 
 from config import Config
+from core.live_task import LiveTaskController
 from skills.desktop_automation import (
-    DesktopAdapterRegistry, ExcelAdapter, PowerPointAdapter,
+    DesktopActionResult, DesktopAdapterRegistry, DesktopAutomationService,
+    ExcelAdapter, PowerPointAdapter, WordAdapter,
     created_files_folder,
     descriptive_filename,
     unique_path,
@@ -102,3 +104,66 @@ def test_powerpoint_creation_uses_deterministic_file_path_and_verified_launcher(
     presentation = Presentation(path)
     assert len(presentation.slides) == 5
     assert presentation.slides[0].shapes.title.text == "Local Ai"
+
+
+def test_desktop_action_log_keeps_initiating_command_during_resume():
+    ctx = _ctx()
+    ctx.state["last_command_text"] = "Create the original proposal."
+    service = DesktopAutomationService(ctx)
+    captured = []
+
+    class Adapter:
+        def create_document(self, **_params):
+            ctx.state["last_command_text"] = "resume the current task"
+            return DesktopActionResult(
+                "success", "Microsoft Word", "create_document", "Created.",
+            )
+
+    service.adapters.get = lambda _name: Adapter()
+    service.logger = SimpleNamespace(write=lambda **entry: captured.append(entry))
+
+    assert service.execute({
+        "skill": "office.create_document",
+        "params": {"intent_group": "CREATE_DOCUMENT"},
+    }) == "Created."
+    assert captured[0]["command"] == "Create the original proposal."
+
+
+def test_cancelled_word_creation_closes_unsaved_document_and_stays_cancelled(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(Config, "CREATED_FILES_DIR", tmp_path)
+    closed = []
+    task = LiveTaskController()
+    ctx = SimpleNamespace(
+        state={}, llm=SimpleNamespace(available=False), live_task=task,
+    )
+
+    class FakeWordService:
+        process_id = 1
+        window_handle = 2
+
+        def open(self, visible=True):
+            return visible
+
+        def new_document(self):
+            task.cancel()
+            return "document"
+
+        def insert_heading(self, *_args, **_kwargs):
+            return True
+
+        def close(self, save=False):
+            closed.append(save)
+            return True
+
+    monkeypatch.setattr("skills.office_service.WordService", FakeWordService)
+
+    result = WordAdapter(ctx).create_document(
+        document_type="proposal", topic="cancellation validation",
+        mode="structured",
+    )
+
+    assert result.status == "cancelled"
+    assert task.snapshot()["status"] == "cancelled"
+    assert closed == [False]
+    assert not list(tmp_path.rglob("*.docx"))

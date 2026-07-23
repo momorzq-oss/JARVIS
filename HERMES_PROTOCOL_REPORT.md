@@ -4,6 +4,8 @@
 
 The adapter narrows that protocol allowlist again for every request. A returned step is accepted only when its capability ID was present in that exact request, and its permission scope and risk level must match the supplied capability-registry metadata. Being on the broader pilot allowlist is not sufficient.
 
+The orchestrator constructs that request subset from live registry records only. Records must be in the pilot set, connected, `WORKING`/`CONNECTED`, assigned a permission scope, and carry valid risk metadata. Approved steps re-enter JARVIS through `ActionManager`; the executor must return an explicit verified status before task progress advances. Research source reads additionally reject loopback, private, link-local, reserved, and otherwise non-public destinations.
+
 Returned plans remain data. `brain/hermes_orchestrator.py` creates a JARVIS task in `WAITING_CONFIRMATION`; it does not execute a desktop action. Execution must be implemented through existing trusted JARVIS capability handlers after confirmation and capability validation.
 
 The constrained adapter uses the official `hermes chat --quiet --query`

@@ -133,6 +133,9 @@ class ActionManager:
         "research.draft_report": ("SAFE_WRITE", "medium"),
         "research.finalize_report": ("SAFE_WRITE", "medium"),
         "research.open_report": ("SAFE_READ", "low"),
+        "research.search_web": ("BROWSER_NAVIGATE", "low"),
+        "research.read_source": ("SAFE_READ", "low"),
+        "research.summarize_sources": ("SAFE_READ", "low"),
         "university.assignment": ("OFFICE_EDIT", "medium"),
         "chat": ("SAFE_READ", "low"),
         "smalltalk": ("SAFE_READ", "low"),
@@ -197,6 +200,11 @@ class ActionManager:
             "drive_search": "SAFE_READ",
             "drive_show_location": "SAFE_READ",
             "stripe_search_payment": "SAFE_READ",
+        },
+        "research": {
+            "search_web": "BROWSER_NAVIGATE",
+            "read_source": "SAFE_READ",
+            "summarize_sources": "SAFE_READ",
         },
         "task": {
             "pause": "DESKTOP_CONTROL",
@@ -584,6 +592,14 @@ class ActionManager:
             return self.controller.ctx.website_automation.execute({
                 "skill": f"website.{action.operation}", "params": params,
             })
+        if action.skill == "research":
+            from skills import research
+            operation = {
+                "search_web": research.search_web,
+                "read_source": research.read_source,
+                "summarize_sources": research.summarize_sources,
+            }[action.operation]
+            return operation(**params)
         if action.skill == "task":
             task = self.controller.ctx.live_task
             operation = {

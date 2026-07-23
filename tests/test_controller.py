@@ -13,6 +13,7 @@ from core.assistant_controller import (
     AssistantController, STATE_IDLE, STATE_LISTENING_WAKE, STATE_PROCESSING,
 )
 from core.action_manager import Action
+from brain.hermes_adapter import HermesAdapterError
 from config import Config
 from voice.speech_service import SpeechOutputService # Import real SpeechOutputService
 
@@ -356,3 +357,62 @@ def test_apply_settings_reconfigures_live_hermes_adapter_safely(monkeypatch):
     assert Config.HERMES_BACKGROUND_TASKS_ENABLED is False
     assert Config.HERMES_SCHEDULING_ENABLED is False
     assert Config.HERMES_LEARNING_ENABLED is False
+
+
+def test_hermes_planning_failure_is_retained_as_failed_task():
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    record = type("Record", (), {
+        "capability_id": "research.search_web", "status": "WORKING",
+        "connected": True, "permission": "BROWSER_NAVIGATE", "risk": "low",
+    })()
+    ctl.capability_registry = type("Registry", (), {
+        "snapshot": lambda self: [record],
+    })()
+    ctl.hermes_orchestrator.registry = ctl.capability_registry
+    ctl.hermes_adapter.enabled = True
+    ctl.hermes_adapter.mode = "cli"
+    ctl.hermes_adapter.plan = lambda _request: (_ for _ in ()).throw(
+        HermesAdapterError("provider rate limited")
+    )
+
+    with pytest.raises(HermesAdapterError, match="rate limited"):
+        ctl.plan_hermes_task(
+            "research", "research public sources",
+            [{"capability_id": "research.search_web"}],
+        )
+
+    tasks = ctl.hermes_tasks.list()
+    assert len(tasks) == 1
+    assert tasks[0].status == "FAILED"
+    assert tasks[0].last_error == "provider rate limited"
+
+
+def test_hermes_step_execution_requires_verified_action_result(monkeypatch):
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    monkeypatch.setattr(
+        ctl.action_manager, "execute_action",
+        lambda _action: [{"title": "Public result", "url": "https://example.test"}],
+    )
+    step = {
+        "step_id": "step-1", "capability_id": "research.search_web",
+        "skill": "research", "operation": "search_web",
+        "parameters": {"query": "renewable energy", "limit": 50},
+        "permission_scope": "BROWSER_NAVIGATE", "risk_level": "low",
+        "requires_confirmation": False, "reversible": True,
+    }
+
+    outcome = ctl._execute_hermes_step(step)
+
+    assert outcome["ok"] is True
+    assert outcome["result"][0]["title"] == "Public result"
+
+
+def test_hermes_word_output_path_is_restricted_to_temp(tmp_path, monkeypatch):
+    monkeypatch.setattr(Config, "TEMP_DIR", tmp_path / "approved")
+    step = {
+        "capability_id": "office_word.save_document",
+        "parameters": {"path": str(tmp_path / "outside.docx")},
+    }
+
+    with pytest.raises(ValueError, match="outside the approved"):
+        AssistantController._validate_hermes_step_parameters(step)

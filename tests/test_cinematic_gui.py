@@ -98,6 +98,30 @@ def test_dashboard_widgets_consume_explicit_backend_state(window):
     assert "GPU: Unavailable" in window.dashboard.metrics.detail.text()
 
 
+def test_hermes_panel_consumes_real_task_progress_fields(window):
+    window._slot_status({
+        "hermes": "configured",
+        "hermes_task": "Research renewable energy",
+        "hermes_task_status": "RUNNING",
+        "hermes_steps": "2/3",
+        "hermes_progress": 67,
+        "hermes_capabilities": "research.search_web, research.read_source",
+        "hermes_elapsed": 12.4,
+        "hermes_retries": 1,
+        "hermes_confirmations": 1,
+        "hermes_output": r"C:\approved\report.docx",
+    })
+
+    panel = window.dashboard.hermes
+    assert panel.task.text() == "Research renewable energy"
+    assert panel.task_status.text() == "RUNNING"
+    assert panel.steps.text() == "2/3"
+    assert panel.progress.text() == "67%"
+    assert panel.retries.text() == "1"
+    assert panel.confirmations.text() == "1"
+    assert panel.output.text().endswith("report.docx")
+
+
 def test_core_motion_and_color_follow_real_state(window):
     window._slot_state("waiting_confirmation", "Approval required")
     assert window.core._state == "waiting_confirmation"

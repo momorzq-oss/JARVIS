@@ -39,6 +39,7 @@ class HermesTaskManager:
         self.max_concurrent = Config.HERMES_MAX_CONCURRENT_TASKS if max_concurrent is None else int(max_concurrent)
         self._tasks: dict[str, HermesTask] = {}
         self._lock = threading.RLock()
+        self._changed = threading.Condition(self._lock)
 
     def create(self, goal: str, owner="user") -> HermesTask:
         with self._lock:
@@ -48,6 +49,7 @@ class HermesTaskManager:
                 raise RuntimeError("Hermes task concurrency limit reached")
             task = HermesTask(task_id=str(uuid.uuid4()), goal=str(goal), owner=owner)
             self._tasks[task.task_id] = task
+            self._changed.notify_all()
             return dataclasses.replace(task)
 
     def get(self, task_id: str) -> HermesTask | None:
@@ -75,6 +77,7 @@ class HermesTaskManager:
                 task.last_error = str(error)
             if steps is not None:
                 task.total_steps = int(steps)
+            self._changed.notify_all()
             return dataclasses.replace(task)
 
     def pause(self, task_id): return self.transition(task_id, "PAUSED")
@@ -85,6 +88,62 @@ class HermesTaskManager:
             task = self._tasks[task_id]
             task.cancellation_token = True
         return self.transition(task_id, "CANCELLED")
+
+    def record_confirmation(self, task_id: str, decision: str) -> HermesTask:
+        with self._lock:
+            task = self._tasks[task_id]
+            task.confirmations.append(str(decision))
+            task.updated_at = time.time()
+            self._changed.notify_all()
+            return dataclasses.replace(task)
+
+    def record_retry(self, task_id: str, error: str) -> HermesTask:
+        with self._lock:
+            task = self._tasks[task_id]
+            task.retries += 1
+            task.last_error = str(error)
+            task.updated_at = time.time()
+            self._changed.notify_all()
+            return dataclasses.replace(task)
+
+    def complete_step(self, task_id: str, capability_id: str, permission: str,
+                      output_files=None) -> HermesTask:
+        with self._lock:
+            task = self._tasks[task_id]
+            if task.cancellation_token:
+                raise RuntimeError("task is cancelled")
+            task.current_step = min(task.total_steps, task.current_step + 1)
+            task.progress = (
+                task.current_step / task.total_steps if task.total_steps else 1.0
+            )
+            if capability_id not in task.capabilities_used:
+                task.capabilities_used.append(str(capability_id))
+            if permission not in task.permissions:
+                task.permissions.append(str(permission))
+            for path in output_files or ():
+                value = str(path)
+                if value and value not in task.output_files:
+                    task.output_files.append(value)
+            task.updated_at = time.time()
+            self._changed.notify_all()
+            return dataclasses.replace(task)
+
+    def wait_until_runnable(self, task_id: str, timeout=None) -> bool:
+        deadline = None if timeout is None else time.monotonic() + max(0, float(timeout))
+        with self._changed:
+            while True:
+                task = self._tasks[task_id]
+                if task.cancellation_token or task.status == "CANCELLED":
+                    return False
+                if task.status != "PAUSED":
+                    return True
+                if deadline is None:
+                    self._changed.wait(0.1)
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._changed.wait(min(0.1, remaining))
 
     def cancel_all(self) -> int:
         with self._lock:

@@ -17,3 +17,20 @@ def test_concurrency_limit():
     manager.create("one")
     with pytest.raises(RuntimeError, match="limit"):
         manager.create("two")
+
+
+def test_task_records_verified_step_progress_and_outputs():
+    manager = HermesTaskManager(max_concurrent=1)
+    task = manager.create("goal")
+    manager.transition(task.task_id, "RUNNING", steps=2)
+
+    current = manager.complete_step(
+        task.task_id, "research.search_web", "BROWSER_NAVIGATE",
+        ["result.json"],
+    )
+
+    assert current.current_step == 1
+    assert current.progress == 0.5
+    assert current.capabilities_used == ["research.search_web"]
+    assert current.permissions == ["BROWSER_NAVIGATE"]
+    assert current.output_files == ["result.json"]

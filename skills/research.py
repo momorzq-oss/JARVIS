@@ -10,10 +10,12 @@ headed sections, inline numbered citations and a References list built
 ONLY from actually-fetched sources. It then opens visibly in Word.
 """
 import json
+import ipaddress
 import re
+import socket
 import time
 from pathlib import Path
-from urllib.parse import quote_plus, urlparse, parse_qs, unquote
+from urllib.parse import quote_plus, urljoin, urlparse, parse_qs, unquote
 
 import requests
 from bs4 import BeautifulSoup
@@ -214,6 +216,96 @@ def research_search(query, limit=6):
         if len(results) >= limit:
             break
     return results
+
+
+def search_web(query, limit=6):
+    """Hermes-pilot wrapper for JARVIS's existing public-source search."""
+    query = str(query or "").strip()
+    if not query:
+        return []
+    return research_search(query, limit=max(1, min(int(limit), 10)))
+
+
+def _require_public_source_url(url):
+    """Reject local/private destinations before a Hermes-proposed read."""
+    value = str(url or "").strip()
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("source URL must be public HTTP or HTTPS")
+    if parsed.username or parsed.password:
+        raise ValueError("source URL credentials are forbidden")
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise ValueError("source URL port is invalid") from exc
+    if port not in {80, 443}:
+        raise ValueError("source URL port is not allowed")
+    host = parsed.hostname.casefold().rstrip(".")
+    if host == "localhost" or host.endswith(".localhost"):
+        raise ValueError("local source URLs are forbidden")
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(host, port)}
+    except OSError as exc:
+        raise ValueError("source hostname could not be resolved") from exc
+    if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
+        raise ValueError("private or non-public source address is forbidden")
+    return value
+
+
+def _fetch_public_page_text(url, max_chars):
+    """Fetch text while validating every redirect destination."""
+    current = _require_public_source_url(url)
+    for _redirect in range(6):
+        response = requests.get(
+            current, headers=UA, timeout=10, allow_redirects=False,
+        )
+        if response.status_code in {301, 302, 303, 307, 308}:
+            location = str(response.headers.get("Location") or "").strip()
+            if not location:
+                raise ValueError("source redirect has no destination")
+            current = _require_public_source_url(urljoin(current, location))
+            continue
+        response.raise_for_status()
+        if "text" not in response.headers.get("Content-Type", "text"):
+            return current, ""
+        soup = BeautifulSoup(response.text, "lxml")
+        for tag in soup([
+            "script", "style", "noscript", "header", "footer", "nav",
+            "aside", "form", "iframe",
+        ]):
+            tag.decompose()
+        paragraphs = [p.get_text(" ", strip=True) for p in soup.find_all("p")]
+        text = "\n".join(paragraph for paragraph in paragraphs if len(paragraph) > 40)
+        return current, text[:max_chars]
+    raise ValueError("source exceeded the redirect limit")
+
+
+def read_source(url, max_chars=3500):
+    """Read bounded public text through the existing research fetcher."""
+    bounded = max(200, min(int(max_chars), 6000))
+    final_url, text = _fetch_public_page_text(url, bounded)
+    return {"url": final_url, "text": text}
+
+
+def summarize_sources(sources, topic="", max_chars=2400):
+    """Create a deterministic evidence digest; never execute returned text."""
+    if not isinstance(sources, list):
+        raise ValueError("sources must be a list")
+    lines = []
+    if str(topic or "").strip():
+        lines.append(f"Source summary for {str(topic).strip()}:")
+    for index, source in enumerate(sources[:10], 1):
+        if not isinstance(source, dict):
+            continue
+        title = re.sub(r"\s+", " ", str(source.get("title") or f"Source {index}")).strip()
+        evidence = re.sub(
+            r"\s+", " ",
+            str(source.get("notes") or source.get("snippet") or source.get("text") or ""),
+        ).strip()
+        url = str(source.get("url") or "").strip()
+        if evidence:
+            lines.append(f"[{index}] {title}: {evidence[:500]}" + (f" ({url})" if url else ""))
+    return "\n".join(lines)[:max(200, min(int(max_chars), 6000))]
 
 
 def bing_search(query, limit=6):

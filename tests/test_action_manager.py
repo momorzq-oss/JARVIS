@@ -267,3 +267,27 @@ def test_execute_action_unknown_skill_rejection(action_manager, mock_controller)
     )
     with pytest.raises(ValueError, match="Unknown skill: unregistered_skill"):
         action_manager.execute_action(action)    
+
+
+def test_hermes_research_tool_uses_registered_jarvis_executor(
+    action_manager, mock_controller, monkeypatch,
+):
+    observed = {}
+    monkeypatch.setattr(
+        "skills.research.search_web",
+        lambda query, limit=6: observed.update(query=query, limit=limit) or [
+            {"title": "Verified result", "url": "https://example.test"},
+        ],
+    )
+    action = Action(
+        action_id="hermes-step-1", skill="research", operation="search_web",
+        parameters={"query": "renewable energy", "limit": 3},
+        permission_scope="BROWSER_NAVIGATE", risk_level="low",
+        requires_confirmation=False, reversible=True,
+    )
+
+    result = action_manager.execute_action(action)
+
+    assert result == [{"title": "Verified result", "url": "https://example.test"}]
+    assert observed == {"query": "renewable energy", "limit": 3}
+    mock_controller.agent.confirm.assert_not_called()

@@ -9,6 +9,8 @@ pipeline on instance-held threads/services - nothing is garbage-collected
 mid-session. No Qt types live here, so it stays testable headlessly.
 """
 import threading
+import time
+from pathlib import Path
 
 from config import Config, ensure_dirs
 from voice import audio_log
@@ -23,6 +25,7 @@ from core.capability_registry import CapabilityRegistry
 from core.unified_tool_catalog import UnifiedToolCatalog
 from core.unified_tool_router import UnifiedToolRouter
 from brain.hermes_task_manager import HermesTaskManager
+from brain.hermes_orchestrator import HermesOrchestrator
 from brain.hermes_health import hermes_health
 from brain.hermes_adapter import HermesAdapter
 from core.account_connections import AccountConnectionManager
@@ -86,6 +89,9 @@ class AssistantController:
         self.unified_tool_router = UnifiedToolRouter()
         self.hermes_adapter = HermesAdapter()
         self.hermes_tasks = HermesTaskManager()
+        self.hermes_orchestrator = HermesOrchestrator(
+            self.hermes_tasks, self.capability_registry,
+        )
         self.account_connections = AccountConnectionManager(self.ctx)
         live_task = getattr(self.ctx, "live_task", None)
         if live_task is not None:
@@ -206,9 +212,35 @@ class AssistantController:
             hermes_tasks = [task.__dict__.copy() for task in self.hermes_tasks.list()]
             snap["hermes_tasks"] = hermes_tasks
             active_hermes = next((task for task in hermes_tasks if task["status"] not in {"COMPLETED", "FAILED", "CANCELLED"}), None)
-            snap["hermes_task"] = active_hermes["goal"] if active_hermes else "Unavailable"
-            snap["hermes_steps"] = (f"{active_hermes['current_step']}/{active_hermes['total_steps']}"
-                                     if active_hermes else "0/0")
+            displayed_hermes = active_hermes or (
+                max(hermes_tasks, key=lambda item: item.get("updated_at", 0))
+                if hermes_tasks else None
+            )
+            snap["hermes_task"] = displayed_hermes["goal"] if displayed_hermes else "Unavailable"
+            snap["hermes_task_status"] = displayed_hermes["status"] if displayed_hermes else "IDLE"
+            snap["hermes_steps"] = (f"{displayed_hermes['current_step']}/{displayed_hermes['total_steps']}"
+                                     if displayed_hermes else "0/0")
+            snap["hermes_progress"] = (
+                round(float(displayed_hermes.get("progress", 0.0)) * 100)
+                if displayed_hermes else 0
+            )
+            snap["hermes_capabilities"] = (
+                ", ".join(displayed_hermes.get("capabilities_used", [])) or "Unavailable"
+                if displayed_hermes else "Unavailable"
+            )
+            snap["hermes_retries"] = displayed_hermes.get("retries", 0) if displayed_hermes else 0
+            snap["hermes_confirmations"] = (
+                len(displayed_hermes.get("confirmations", [])) if displayed_hermes else 0
+            )
+            snap["hermes_output"] = (
+                (displayed_hermes.get("output_files") or ["Unavailable"])[-1]
+                if displayed_hermes else "Unavailable"
+            )
+            started = displayed_hermes.get("started_at") if displayed_hermes else None
+            ended = displayed_hermes.get("completed_at") if displayed_hermes else None
+            snap["hermes_elapsed"] = (
+                max(0, round((ended or time.time()) - started, 1)) if started else 0.0
+            )
             snap["unified_tools"] = self.unified_tool_catalog.report()
             snap["browser"] = "open" if self._browser_open() else "closed"
             snap["desktop_agent"] = "ready"
@@ -282,6 +314,116 @@ class AssistantController:
         result = HermesRuntimeManager().open_provider_setup()
         self._emit("hermes_configuration", result)
         return result
+
+    def plan_hermes_task(self, goal, user_request, capabilities=None):
+        """Request and retain one constrained plan; never execute it here."""
+        if not self.hermes_adapter.enabled or self.hermes_adapter.mode != "cli":
+            raise RuntimeError("Hermes planning is disabled")
+        if not self.capability_registry.snapshot():
+            self.capability_registry.discover()
+            self.capability_registry.run_health_checks()
+        request = self.hermes_orchestrator.prepare_request(
+            goal, user_request, capabilities,
+        )
+        if not request.available_capabilities:
+            raise RuntimeError("No healthy pilot capabilities are available")
+        task = self.hermes_tasks.create(request.goal)
+        self.hermes_tasks.transition(task.task_id, "PLANNING")
+        try:
+            payload = self.hermes_adapter.plan(request)
+            plan, task = self.hermes_orchestrator.accept_plan(
+                request, payload, task_id=task.task_id,
+            )
+        except Exception as exc:
+            self.hermes_tasks.transition(task.task_id, "FAILED", error=str(exc))
+            raise
+        self._emit("status", self.status_snapshot())
+        return request, plan, task
+
+    @staticmethod
+    def _validate_hermes_step_parameters(step):
+        capability_id = str(step.get("capability_id") or "")
+        params = dict(step.get("parameters") or {})
+        if capability_id == "research.search_web":
+            query = str(params.get("query") or "").strip()
+            if not query or len(query) > 500:
+                raise ValueError("Hermes research query is invalid")
+            params["query"] = query
+            params["limit"] = max(1, min(int(params.get("limit", 6)), 10))
+        elif capability_id == "research.read_source":
+            url = str(params.get("url") or "").strip()
+            if not url or len(url) > 2048:
+                raise ValueError("Hermes source URL is invalid")
+            params["url"] = url
+            params["max_chars"] = max(200, min(int(params.get("max_chars", 3500)), 6000))
+        elif capability_id == "research.summarize_sources":
+            sources = params.get("sources")
+            if not isinstance(sources, list) or len(sources) > 10:
+                raise ValueError("Hermes sources must be a bounded list")
+        elif capability_id == "office_word.create_document":
+            if params:
+                raise ValueError("Hermes blank document creation takes no parameters")
+        elif capability_id == "office_word.insert_text":
+            text = str(params.get("text") or "")
+            if not text or len(text) > 20_000:
+                raise ValueError("Hermes Word text is invalid")
+            params = {"text": text}
+        elif capability_id == "office_word.save_document":
+            raw_path = Path(str(params.get("path") or ""))
+            if not raw_path.is_absolute():
+                raise ValueError("Hermes output path must be absolute")
+            path = raw_path.resolve()
+            root = Config.TEMP_DIR.resolve()
+            try:
+                path.relative_to(root)
+            except ValueError as exc:
+                raise ValueError("Hermes output path is outside the approved temp directory") from exc
+            params = {"path": str(path)}
+        return params
+
+    def _execute_hermes_step(self, step):
+        """Execute one validated step only through ActionManager's allowlist."""
+        params = self._validate_hermes_step_parameters(step)
+        action = Action(
+            action_id=str(step["step_id"]), skill=str(step["skill"]),
+            operation=str(step["operation"]), parameters=params,
+            permission_scope=str(step["permission_scope"]),
+            risk_level=str(step["risk_level"]),
+            requires_confirmation=bool(step["requires_confirmation"]),
+            reversible=bool(step["reversible"]), rollback_action=None,
+        )
+        result = self.action_manager.execute_action(action)
+        capability_id = str(step["capability_id"])
+        if capability_id == "research.search_web":
+            ok = isinstance(result, list) and bool(result)
+        elif capability_id == "research.read_source":
+            ok = isinstance(result, dict) and bool(str(result.get("text") or "").strip())
+        elif capability_id == "research.summarize_sources":
+            ok = isinstance(result, str) and bool(result.strip())
+        else:
+            text = str(result or "").lower()
+            ok = bool(result is not None and not any(
+                marker in text for marker in ("couldn't", "failed", "denied", "cancelled")
+            ))
+        output_files = []
+        if capability_id == "office_word.save_document" and ok:
+            path = Path(params["path"])
+            if path.is_file():
+                output_files.append(str(path))
+            else:
+                ok = False
+        return {
+            "ok": ok, "result": result, "output_files": output_files,
+            "error": "JARVIS could not verify the step success condition" if not ok else "",
+        }
+
+    def run_approved_hermes_plan(self, request, plan, task_id, *, approved):
+        outcome = self.hermes_orchestrator.run_approved_plan(
+            request, plan, self._execute_hermes_step,
+            approved=bool(approved), task_id=task_id,
+        )
+        self._emit("status", self.status_snapshot())
+        return outcome
 
     def preload_models(self):
         if self.skip_preload:

@@ -35,6 +35,9 @@ OPERATION_CONFIG_REQUIREMENTS = {
     ("word_skill", "create_live_document"): ("OPENROUTER_API_KEY",),
     ("word_skill", "write_document"): ("OPENROUTER_API_KEY",),
     ("word_skill", "continue_document"): ("OPENROUTER_API_KEY",),
+    ("research", "search_web"): (),
+    ("research", "read_source"): (),
+    ("research", "summarize_sources"): (),
 }
 
 LOGIN_REQUIREMENTS = {

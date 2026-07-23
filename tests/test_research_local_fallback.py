@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from skills import research
 
 
@@ -51,3 +53,63 @@ def test_local_draft_never_claims_success_without_verified_sources():
     research.draft_all(session, ctx)
 
     assert session["draft"] == {"Current state": ""}
+
+
+def test_hermes_research_read_rejects_private_network_destinations(monkeypatch):
+    monkeypatch.setattr(
+        research.socket, "getaddrinfo",
+        lambda *_args, **_kwargs: [(None, None, None, None, ("127.0.0.1", 80))],
+    )
+
+    try:
+        research.read_source("http://example.test/private")
+    except ValueError as exc:
+        assert "private" in str(exc)
+    else:
+        raise AssertionError("private source address was accepted")
+
+
+def test_hermes_research_wrappers_use_existing_bounded_services(monkeypatch):
+    monkeypatch.setattr(
+        research, "research_search",
+        lambda query, limit: [{"title": query, "url": "https://example.test"}],
+    )
+    monkeypatch.setattr(
+        research.socket, "getaddrinfo",
+        lambda host, port: [(
+            None, None, None, None,
+            (("127.0.0.1" if host == "127.0.0.1" else "93.184.216.34"), port),
+        )],
+    )
+    monkeypatch.setattr(
+        research, "_fetch_public_page_text",
+        lambda url, max_chars: (url, "Public evidence"),
+    )
+
+    assert research.search_web("renewable energy", limit=99) == [{
+        "title": "renewable energy", "url": "https://example.test",
+    }]
+    assert research.read_source("https://example.test") == {
+        "url": "https://example.test", "text": "Public evidence",
+    }
+    assert "Public evidence" in research.summarize_sources([{
+        "title": "Source", "url": "https://example.test", "text": "Public evidence",
+    }], topic="renewable energy")
+
+
+def test_hermes_research_read_revalidates_redirect_destination(monkeypatch):
+    class Redirect:
+        status_code = 302
+        headers = {"Location": "http://127.0.0.1/private"}
+
+    monkeypatch.setattr(
+        research.socket, "getaddrinfo",
+        lambda host, port: [(
+            None, None, None, None,
+            (("127.0.0.1" if host == "127.0.0.1" else "93.184.216.34"), port),
+        )],
+    )
+    monkeypatch.setattr(research.requests, "get", lambda *_args, **_kwargs: Redirect())
+
+    with pytest.raises(ValueError, match="local|private|non-public"):
+        research.read_source("https://example.test/redirect")

@@ -49,6 +49,9 @@ class DashboardPage(QWidget):
     closeApplicationRequested = Signal(str)
     focusApplicationRequested = Signal(str)
     closeAllRequested = Signal()
+    hermesApproveRequested = Signal()
+    hermesDenyRequested = Signal()
+    hermesCancelRequested = Signal()
 
     def __init__(self, reduced_motion=False, parent=None):
         super().__init__(parent)
@@ -140,6 +143,9 @@ class DashboardPage(QWidget):
         self.applications.closeSelected.connect(self.closeApplicationRequested)
         self.applications.focusSelected.connect(self.focusApplicationRequested)
         self.applications.closeAll.connect(self.closeAllRequested)
+        self.hermes.approveRequested.connect(self.hermesApproveRequested)
+        self.hermes.denyRequested.connect(self.hermesDenyRequested)
+        self.hermes.cancelRequested.connect(self.hermesCancelRequested)
 
     def set_reduce_motion(self, enabled):
         self.core.set_reduce_motion(enabled)

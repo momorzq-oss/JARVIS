@@ -142,6 +142,8 @@ class ActionManager:
         "hermes.pause": ("DESKTOP_CONTROL", "low"),
         "hermes.resume": ("DESKTOP_CONTROL", "low"),
         "hermes.cancel": ("DESKTOP_CONTROL", "low"),
+        "hermes.approve": ("DESKTOP_CONTROL", "medium"),
+        "hermes.deny": ("DESKTOP_CONTROL", "low"),
         "university.assignment": ("OFFICE_EDIT", "medium"),
         "chat": ("SAFE_READ", "low"),
         "smalltalk": ("SAFE_READ", "low"),

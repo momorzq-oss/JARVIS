@@ -110,6 +110,9 @@ def test_hermes_panel_consumes_real_task_progress_fields(window):
         "hermes_retries": 1,
         "hermes_confirmations": 1,
         "hermes_output": r"C:\approved\report.docx",
+        "hermes_plan_summary": "Use three public sources",
+        "hermes_requested_capabilities": "research.search_web, research.read_source",
+        "hermes_approval_pending": False,
     })
 
     panel = window.dashboard.hermes
@@ -120,6 +123,36 @@ def test_hermes_panel_consumes_real_task_progress_fields(window):
     assert panel.retries.text() == "1"
     assert panel.confirmations.text() == "1"
     assert panel.output.text().endswith("report.docx")
+    assert panel.plan_summary.text() == "Use three public sources"
+    assert panel.requested_capabilities.text().startswith("research.search_web")
+    assert panel.approve_button.isEnabled() is False
+
+
+def test_hermes_approval_controls_enable_only_for_real_pending_plan(qapp, window, monkeypatch):
+    commands = []
+    monkeypatch.setattr(window, "_quick", lambda text: commands.append(text))
+    window._slot_status({
+        "hermes": "configured", "hermes_task": "Safe research",
+        "hermes_task_status": "WAITING_CONFIRMATION", "hermes_steps": "0/1",
+        "hermes_approval_pending": True,
+        "hermes_plan_summary": "Read public sources",
+        "hermes_requested_capabilities": "research.search_web",
+    })
+
+    panel = window.dashboard.hermes
+    assert panel.approve_button.isEnabled() is True
+    assert panel.deny_button.isEnabled() is True
+    assert panel.cancel_button.isEnabled() is True
+    panel.approve_button.click()
+    panel.deny_button.click()
+    panel.cancel_button.click()
+    qapp.processEvents()
+
+    assert commands == [
+        "approve Hermes task current",
+        "deny Hermes task current",
+        "cancel Hermes task current",
+    ]
 
 
 def test_core_motion_and_color_follow_real_state(window):

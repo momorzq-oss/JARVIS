@@ -27,7 +27,7 @@ from core.unified_tool_router import UnifiedToolRouter
 from brain.hermes_task_manager import HermesTaskManager
 from brain.hermes_orchestrator import HermesOrchestrator
 from brain.hermes_health import hermes_health
-from brain.hermes_adapter import HermesAdapter
+from brain.hermes_adapter import HermesAdapter, HermesAdapterError
 from core.account_connections import AccountConnectionManager
 
 STATE_IDLE = "idle"
@@ -92,6 +92,7 @@ class AssistantController:
         self.hermes_orchestrator = HermesOrchestrator(
             self.hermes_tasks, self.capability_registry,
         )
+        self._hermes_pending_plans = {}
         self.account_connections = AccountConnectionManager(self.ctx)
         live_task = getattr(self.ctx, "live_task", None)
         if live_task is not None:
@@ -241,6 +242,26 @@ class AssistantController:
             snap["hermes_elapsed"] = (
                 max(0, round((ended or time.time()) - started, 1)) if started else 0.0
             )
+            pending_plan = (
+                self._hermes_pending_plans.get(displayed_hermes["task_id"])
+                if displayed_hermes else None
+            )
+            plan_payload = pending_plan[1] if pending_plan else {}
+            snap["hermes_plan_summary"] = str(
+                plan_payload.get("summary") or "Unavailable"
+            )
+            snap["hermes_requested_capabilities"] = (
+                ", ".join(dict.fromkeys(
+                    str(step.get("capability_id") or "")
+                    for step in plan_payload.get("steps", [])
+                    if step.get("capability_id")
+                )) or "Unavailable"
+            )
+            snap["hermes_approval_pending"] = bool(
+                displayed_hermes
+                and displayed_hermes["status"] == "WAITING_CONFIRMATION"
+                and pending_plan
+            )
             snap["unified_tools"] = self.unified_tool_catalog.report()
             snap["browser"] = "open" if self._browser_open() else "closed"
             snap["desktop_agent"] = "ready"
@@ -334,6 +355,11 @@ class AssistantController:
             plan, task = self.hermes_orchestrator.accept_plan(
                 request, payload, task_id=task.task_id,
             )
+            with self._lock:
+                current = self.hermes_tasks.get(task.task_id)
+                if current is None or current.cancellation_token:
+                    raise HermesAdapterError("request cancelled")
+                self._hermes_pending_plans[task.task_id] = (request, plan)
         except Exception as exc:
             current = self.hermes_tasks.get(task.task_id)
             # A pre-emptive GUI/voice cancellation terminates the owned CLI
@@ -423,12 +449,15 @@ class AssistantController:
         }
 
     def run_approved_hermes_plan(self, request, plan, task_id, *, approved):
-        outcome = self.hermes_orchestrator.run_approved_plan(
-            request, plan, self._execute_hermes_step,
-            approved=bool(approved), task_id=task_id,
-        )
-        self._emit("status", self.status_snapshot())
-        return outcome
+        try:
+            return self.hermes_orchestrator.run_approved_plan(
+                request, plan, self._execute_hermes_step,
+                approved=bool(approved), task_id=task_id,
+            )
+        finally:
+            with self._lock:
+                self._hermes_pending_plans.pop(task_id, None)
+            self._emit("status", self.status_snapshot())
 
     def _select_hermes_task(self, selector="current"):
         tasks = sorted(self.hermes_tasks.list(), key=lambda item: item.created_at)
@@ -518,6 +547,28 @@ class AssistantController:
         task = self._select_hermes_task(params.get("task"))
         if task is None:
             return "I could not find that Hermes task."
+        if skill in {"hermes.approve", "hermes.deny"}:
+            with self._lock:
+                pending = self._hermes_pending_plans.get(task.task_id)
+            if task.status != "WAITING_CONFIRMATION" or pending is None:
+                return f"Hermes task {task.task_id} has no plan waiting for approval."
+            request, plan = pending
+            approved = skill == "hermes.approve"
+            _plan, updated, results = self.run_approved_hermes_plan(
+                request, plan, task.task_id, approved=approved,
+            )
+            if not approved:
+                return f"Hermes task {updated.task_id} was denied and cancelled."
+            if updated.status == "COMPLETED":
+                output = updated.output_files[-1] if updated.output_files else "no output file"
+                return (
+                    f"Hermes task {updated.task_id} completed {updated.current_step} "
+                    f"verified steps through JARVIS. Output: {output}."
+                )
+            return (
+                f"Hermes task {updated.task_id} stopped with status "
+                f"{updated.status.lower()}: {updated.last_error or 'no verified result'}."
+            )
         if skill == "hermes.pause":
             if task.status not in {"RUNNING", "RETRYING"}:
                 return f"Hermes task {task.task_id} cannot be paused while it is {task.status.lower()}."
@@ -535,7 +586,9 @@ class AssistantController:
                 return f"Hermes task {task.task_id} is already {task.status.lower()}."
             if task.status == "PLANNING":
                 self.hermes_adapter.cancel()
-            updated = self.hermes_tasks.cancel(task.task_id)
+            with self._lock:
+                updated = self.hermes_tasks.cancel(task.task_id)
+                self._hermes_pending_plans.pop(task.task_id, None)
             self._emit("status", self.status_snapshot())
             return f"Hermes task {updated.task_id} was cancelled."
         return "That Hermes command is not registered."
@@ -776,6 +829,8 @@ class AssistantController:
             self.hermes_tasks.cancel_all()
         except Exception:
             pass
+        with self._lock:
+            self._hermes_pending_plans.clear()
         self._emit("agentstatus", "Cancelled", "stopped by user")
         return True
 
@@ -797,6 +852,12 @@ class AssistantController:
             self.hermes_adapter.cancel()
         except Exception:
             pass
+        try:
+            self.hermes_tasks.cancel_all()
+        except Exception:
+            pass
+        with self._lock:
+            self._hermes_pending_plans.clear()
         try:
             with self._lock:
                 engine = self.voice_engine

@@ -678,6 +678,8 @@ def test_emergency_dispatch_cancels_controller_owned_hermes_adapter():
     ("Pause task one", "hermes.pause"),
     ("Continue Hermes task 2", "hermes.resume"),
     ("Cancel Hermes task current", "hermes.cancel"),
+    ("Approve Hermes task one", "hermes.approve"),
+    ("Reject Hermes task 2", "hermes.deny"),
 ])
 def test_hermes_commands_use_shared_deterministic_route(phrase, skill):
     ctx = context()

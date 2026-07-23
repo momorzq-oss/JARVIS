@@ -262,6 +262,15 @@ class MainWindow(QWidget):
         self.dashboard.closeApplicationRequested.connect(self._close_named)
         self.dashboard.focusApplicationRequested.connect(self._focus_named)
         self.dashboard.closeAllRequested.connect(self._on_close_all)
+        self.dashboard.hermesApproveRequested.connect(
+            lambda: self._quick("approve Hermes task current")
+        )
+        self.dashboard.hermesDenyRequested.connect(
+            lambda: self._quick("deny Hermes task current")
+        )
+        self.dashboard.hermesCancelRequested.connect(
+            lambda: self._quick("cancel Hermes task current")
+        )
         self.tasks_page.pauseRequested.connect(lambda: self._quick("pause the current task"))
         self.tasks_page.resumeRequested.connect(lambda: self._quick("resume the current task"))
         self.tasks_page.cancelRequested.connect(self._on_stop_task)

@@ -418,6 +418,47 @@ def test_cancelled_hermes_planning_is_not_rewritten_as_failed():
     assert task.cancellation_token is True
 
 
+def test_cancel_between_plan_validation_and_retention_leaves_no_stale_payload(monkeypatch):
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    record = type("Record", (), {
+        "capability_id": "research.search_web", "status": "WORKING",
+        "connected": True, "permission": "BROWSER_NAVIGATE", "risk": "low",
+    })()
+    ctl.capability_registry = type("Registry", (), {
+        "snapshot": lambda self: [record],
+    })()
+    ctl.hermes_orchestrator.registry = ctl.capability_registry
+    ctl.hermes_adapter.enabled = True
+    ctl.hermes_adapter.mode = "cli"
+    ctl.hermes_adapter.plan = lambda request: {
+        "protocol_version": "1.0", "task_id": request.task_id,
+        "status": "planned", "summary": "Safe plan",
+        "steps": [{
+            "step_id": "step-1", "capability_id": "research.search_web",
+            "skill": "research", "operation": "search_web",
+            "parameters": {"query": "public topic"},
+            "permission_scope": "BROWSER_NAVIGATE", "risk_level": "low",
+            "requires_confirmation": False, "reversible": True,
+            "success_condition": "results", "failure_strategy": "stop",
+        }],
+    }
+    accept = ctl.hermes_orchestrator.accept_plan
+
+    def cancel_after_accept(*args, **kwargs):
+        plan, task = accept(*args, **kwargs)
+        ctl.hermes_tasks.cancel(task.task_id)
+        return plan, task
+
+    monkeypatch.setattr(ctl.hermes_orchestrator, "accept_plan", cancel_after_accept)
+
+    with pytest.raises(HermesAdapterError, match="cancelled"):
+        ctl.plan_hermes_task("safe goal", "safe goal")
+
+    task = ctl.hermes_tasks.list()[0]
+    assert task.status == "CANCELLED"
+    assert ctl._hermes_pending_plans == {}
+
+
 def test_hermes_step_execution_requires_verified_action_result(monkeypatch):
     ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
     monkeypatch.setattr(
@@ -527,3 +568,98 @@ def test_planning_task_cancel_stops_exact_adapter_request(monkeypatch):
     assert cancelled == [True]
     assert ctl.hermes_tasks.get(task.task_id).status == "CANCELLED"
     assert "cancelled" in result.lower()
+
+
+def test_hermes_plan_is_retained_for_explicit_approval_then_executes_once(monkeypatch):
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    record = type("Record", (), {
+        "capability_id": "research.search_web", "status": "WORKING",
+        "connected": True, "permission": "BROWSER_NAVIGATE", "risk": "low",
+    })()
+    ctl.capability_registry = type("Registry", (), {
+        "snapshot": lambda self: [record],
+    })()
+    ctl.hermes_orchestrator.registry = ctl.capability_registry
+    ctl.hermes_adapter.enabled = True
+    ctl.hermes_adapter.mode = "cli"
+
+    def plan(request):
+        return {
+            "protocol_version": "1.0", "task_id": request.task_id,
+            "status": "planned", "summary": "Search one public topic.",
+            "steps": [{
+                "step_id": "step-1", "capability_id": "research.search_web",
+                "skill": "research", "operation": "search_web",
+                "parameters": {"query": "renewable energy", "limit": 3},
+                "permission_scope": "BROWSER_NAVIGATE", "risk_level": "low",
+                "requires_confirmation": False, "reversible": True,
+                "success_condition": "Public results returned",
+                "failure_strategy": "stop",
+            }],
+        }
+
+    ctl.hermes_adapter.plan = plan
+    executed = []
+    monkeypatch.setattr(
+        ctl, "_execute_hermes_step",
+        lambda step: executed.append(step["capability_id"]) or {
+            "ok": True, "result": "verified public results", "output_files": [],
+        },
+    )
+
+    _request, _plan, task = ctl.plan_hermes_task(
+        "research renewable energy", "research renewable energy",
+        [{"capability_id": "research.search_web"}],
+    )
+    snapshot = ctl.status_snapshot()
+    assert snapshot["hermes_approval_pending"] is True
+    assert snapshot["hermes_plan_summary"] == "Search one public topic."
+    assert snapshot["hermes_requested_capabilities"] == "research.search_web"
+
+    result = ctl.handle_hermes_intent("hermes.approve", {"task": "current"})
+
+    assert executed == ["research.search_web"]
+    assert "completed 1 verified steps" in result
+    assert ctl.hermes_tasks.get(task.task_id).status == "COMPLETED"
+    assert task.task_id not in ctl._hermes_pending_plans
+    assert "no plan waiting" in ctl.handle_hermes_intent(
+        "hermes.approve", {"task": task.task_id},
+    )
+
+
+def test_deny_hermes_plan_cancels_without_executing(monkeypatch):
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    task = ctl.hermes_tasks.create("safe goal")
+    ctl.hermes_tasks.transition(task.task_id, "WAITING_CONFIRMATION", steps=1)
+    request = object()
+    plan = {"summary": "Safe plan", "steps": []}
+    ctl._hermes_pending_plans[task.task_id] = (request, plan)
+    executed = []
+
+    def deny(_request, _plan, task_id, *, approved):
+        assert approved is False
+        ctl.hermes_tasks.record_confirmation(task_id, "denied")
+        updated = ctl.hermes_tasks.cancel(task_id)
+        ctl._hermes_pending_plans.pop(task_id, None)
+        return _plan, updated, executed
+
+    monkeypatch.setattr(ctl, "run_approved_hermes_plan", deny)
+
+    result = ctl.handle_hermes_intent("hermes.deny", {"task": "current"})
+
+    assert executed == []
+    assert "denied and cancelled" in result
+    assert ctl.hermes_tasks.get(task.task_id).status == "CANCELLED"
+    assert task.task_id not in ctl._hermes_pending_plans
+
+
+def test_global_stop_clears_all_retained_hermes_plans():
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    task = ctl.hermes_tasks.create("waiting goal")
+    ctl.hermes_tasks.transition(task.task_id, "WAITING_CONFIRMATION", steps=1)
+    ctl._hermes_pending_plans[task.task_id] = (object(), {"summary": "plan"})
+
+    assert ctl.stop_task() is True
+
+    assert ctl.hermes_tasks.get(task.task_id).status == "CANCELLED"
+    assert ctl._hermes_pending_plans == {}

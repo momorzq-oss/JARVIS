@@ -561,14 +561,14 @@ def _classify_hermes_intent(text):
         return {"skill": "hermes.tasks", "params": {}}
 
     control = re.fullmatch(
-        r"(pause|resume|continue|cancel|stop)\s+"
+        r"(pause|resume|continue|cancel|stop|approve|deny|reject)\s+"
         r"(?:hermes(?:'s)?\s+)?task(?:\s+(?:number\s+)?)?(.+)?",
         low,
     )
     if control:
         action = control.group(1)
         operation = {
-            "continue": "resume", "stop": "cancel",
+            "continue": "resume", "stop": "cancel", "reject": "deny",
         }.get(action, action)
         selector = (control.group(2) or "current").strip()
         return {

@@ -265,7 +265,7 @@ VALID_SKILLS = {
     "research.open_report", "research.continue", "research.finalize",
     "research.outline", "university.assignment", "chat", "smalltalk",
     "hermes.status", "hermes.tasks", "hermes.plan", "hermes.pause",
-    "hermes.resume", "hermes.cancel",
+    "hermes.resume", "hermes.cancel", "hermes.approve", "hermes.deny",
     "window.front", "window.minimize", "window.maximize", "window.restore", "window.focus", "window.close",
     "system.emergency_stop", "office.create_document", "office.create_spreadsheet",
     "office.create_presentation", "office.save", "office.export",

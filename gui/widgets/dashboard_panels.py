@@ -330,6 +330,10 @@ class ReasoningPanel(HudPanel):
 
 
 class HermesPanel(HudPanel):
+    approveRequested = Signal()
+    denyRequested = Signal()
+    cancelRequested = Signal()
+
     def __init__(self, parent=None):
         super().__init__("Hermes Orchestrator", parent, compact=True)
         self.status = _value_label("Disabled")
@@ -338,6 +342,8 @@ class HermesPanel(HudPanel):
         self.steps = _value_label("Unavailable")
         self.progress = _value_label("0%")
         self.capabilities = _value_label("Unavailable")
+        self.plan_summary = _value_label("Unavailable")
+        self.requested_capabilities = _value_label("Unavailable")
         self.elapsed = _value_label("0.0 s")
         self.retries = _value_label("0")
         self.confirmations = _value_label("0")
@@ -350,11 +356,29 @@ class HermesPanel(HudPanel):
         form.addRow("STEPS", self.steps)
         form.addRow("PROGRESS", self.progress)
         form.addRow("CAPABILITIES", self.capabilities)
+        form.addRow("PLAN", self.plan_summary)
+        form.addRow("REQUESTED TOOLS", self.requested_capabilities)
         form.addRow("ELAPSED", self.elapsed)
         form.addRow("RETRIES", self.retries)
         form.addRow("CONFIRMATIONS", self.confirmations)
         form.addRow("OUTPUT", self.output)
         self.content.addLayout(form)
+        controls = QHBoxLayout()
+        self.approve_button = QPushButton("APPROVE ONCE")
+        self.approve_button.setObjectName("hermesApprove")
+        self.deny_button = QPushButton("DENY")
+        self.deny_button.setObjectName("hermesDeny")
+        self.cancel_button = QPushButton("CANCEL TASK")
+        self.cancel_button.setObjectName("danger")
+        self.approve_button.clicked.connect(self.approveRequested)
+        self.deny_button.clicked.connect(self.denyRequested)
+        self.cancel_button.clicked.connect(self.cancelRequested)
+        for button in (self.approve_button, self.deny_button, self.cancel_button):
+            controls.addWidget(button)
+        self.content.addLayout(controls)
+        self.approve_button.setEnabled(False)
+        self.deny_button.setEnabled(False)
+        self.cancel_button.setEnabled(False)
 
     def set_snapshot(self, snapshot):
         snapshot = snapshot if isinstance(snapshot, dict) else {}
@@ -364,10 +388,22 @@ class HermesPanel(HudPanel):
         self.steps.setText(str(snapshot.get("hermes_steps", "Unavailable")))
         self.progress.setText(f"{int(snapshot.get('hermes_progress', 0) or 0)}%")
         self.capabilities.setText(str(snapshot.get("hermes_capabilities") or "Unavailable"))
+        self.plan_summary.setText(str(snapshot.get("hermes_plan_summary") or "Unavailable"))
+        self.requested_capabilities.setText(str(
+            snapshot.get("hermes_requested_capabilities") or "Unavailable"
+        ))
         self.elapsed.setText(f"{float(snapshot.get('hermes_elapsed', 0.0) or 0.0):.1f} s")
         self.retries.setText(str(snapshot.get("hermes_retries", 0)))
         self.confirmations.setText(str(snapshot.get("hermes_confirmations", 0)))
         self.output.setText(str(snapshot.get("hermes_output") or "Unavailable"))
+        approval_pending = bool(snapshot.get("hermes_approval_pending"))
+        task_state = str(snapshot.get("hermes_task_status") or "").upper()
+        self.approve_button.setEnabled(approval_pending)
+        self.deny_button.setEnabled(approval_pending)
+        self.cancel_button.setEnabled(task_state in {
+            "QUEUED", "PLANNING", "WAITING_CONFIRMATION", "RUNNING",
+            "PAUSED", "RETRYING", "ROLLING_BACK",
+        })
 
 
 class CapabilitySummaryPanel(HudPanel):

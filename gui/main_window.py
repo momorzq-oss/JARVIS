@@ -64,6 +64,7 @@ class MainWindow(QWidget):
         self.settings = settings
         self._startup_progress = startup_progress
         self._voice_on = False
+        self._last_speaker_state = "unavailable"
         self._latest_status = {}
         self._latest_task = {}
         self._latest_registry = []
@@ -401,9 +402,23 @@ class MainWindow(QWidget):
         self._voice_on = bool(snapshot.get("microphone_active"))
         self.dashboard.set_voice_snapshot(snapshot)
         self.subsystems.update_snapshot({**self._latest_status, **snapshot})
-        speaker = snapshot.get("speaker_state", "unavailable")
+        previous_speaker = self._last_speaker_state
+        speaker = str(snapshot.get("speaker_state", "unavailable"))
+        self._last_speaker_state = speaker
         if speaker == "speaking":
             self.dashboard.set_state("speaking", "Piper output active")
+        elif previous_speaker == "speaking":
+            if snapshot.get("recording"):
+                self.dashboard.set_state("recording", "Recording command")
+            elif snapshot.get("processing"):
+                self.dashboard.set_state("processing", "Processing voice command")
+            elif snapshot.get("microphone_active") and snapshot.get("wakeword_active"):
+                self.dashboard.set_state("listening_wake", "Waiting for Hey Jarvis")
+            elif speaker == "error":
+                self.dashboard.set_state("error", "Piper output error")
+            else:
+                detail = "Piper muted" if speaker == "muted" else "Ready for command"
+                self.dashboard.set_state("ready", detail)
         error = snapshot.get("last_audio_error")
         if error:
             self.current_status.setText(f"Audio error: {error}")

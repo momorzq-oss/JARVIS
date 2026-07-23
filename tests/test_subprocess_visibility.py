@@ -1,4 +1,5 @@
 """Windows GUI helpers must not flash a terminal for background work."""
+import sys
 from types import SimpleNamespace
 
 from skills import coder
@@ -66,7 +67,11 @@ def test_resolved_application_launch_is_hidden(monkeypatch):
         return Process()
 
     monkeypatch.setattr(system_control.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(system_control.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(system_control, "_matching_process_ids", lambda _value: set())
+    monkeypatch.setattr(
+        system_control, "_verify_launched_app",
+        lambda _target, _hwnds, _pids: (84, 1001, "Example"),
+    )
 
     result = system_control._launch_resolved(target, ctx)
 
@@ -75,6 +80,111 @@ def test_resolved_application_launch_is_hidden(monkeypatch):
     assert observed["kwargs"]["shell"] is False
     assert observed["kwargs"].get("creationflags", 0) == _expected_hidden_flags(system_control)
     assert registrations
+
+
+def test_redirected_application_registers_verified_window_pid(monkeypatch):
+    registrations = []
+    target = SimpleNamespace(
+        kind="app", value="C:\\Windows\\System32\\notepad.exe", name="notepad",
+    )
+    ctx = SimpleNamespace(
+        registry=SimpleNamespace(register=lambda *args, **kwargs: registrations.append((args, kwargs)))
+    )
+
+    monkeypatch.setattr(system_control.subprocess, "Popen", lambda *args, **kwargs: Process())
+    monkeypatch.setattr(system_control, "_matching_process_ids", lambda _value: {21})
+    monkeypatch.setattr(
+        system_control, "_verify_launched_app",
+        lambda _target, _hwnds, _pids: (99, 1200, "Untitled - Notepad"),
+    )
+
+    assert system_control._launch_resolved(target, ctx) == "Opening notepad."
+    _, metadata = registrations[0]
+    assert metadata["pid"] == 99
+    assert metadata["hwnd"] == 1200
+    assert metadata["window_title"] == "Untitled - Notepad"
+    assert metadata["extra"]["launcher_pid"] == 42
+    assert metadata["extra"]["verified_window"] is True
+
+
+def test_unverified_application_launch_is_not_registered(monkeypatch):
+    registrations = []
+    target = SimpleNamespace(kind="app", value="missing.exe", name="Missing")
+    ctx = SimpleNamespace(
+        registry=SimpleNamespace(register=lambda *args, **kwargs: registrations.append((args, kwargs)))
+    )
+    monkeypatch.setattr(system_control.subprocess, "Popen", lambda *args, **kwargs: Process())
+    monkeypatch.setattr(system_control, "_matching_process_ids", lambda _value: set())
+    monkeypatch.setattr(system_control, "_verify_launched_app", lambda *_args: None)
+
+    assert system_control._launch_resolved(target, ctx) is None
+    assert registrations == []
+
+
+def test_folder_uses_shell_handoff_and_registers_verified_window(monkeypatch, tmp_path):
+    registrations = []
+    folder = tmp_path / "Downloads"
+    folder.mkdir()
+    target = SimpleNamespace(kind="folder", value=str(folder), name="Downloads")
+    ctx = SimpleNamespace(
+        registry=SimpleNamespace(
+            register=lambda *args, **kwargs: registrations.append((args, kwargs))
+        )
+    )
+
+    opened = []
+
+    def fake_popen(args, **kwargs):
+        opened.append((args, kwargs))
+        return Process()
+
+    monkeypatch.setattr(system_control.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        system_control,
+        "_find_new_folder_window",
+        lambda _path, _existing: (84, 1001, "Downloads - File Explorer"),
+    )
+
+    assert system_control._launch_resolved(target, ctx) == "Opening the folder Downloads."
+    assert opened[0][0] == ["explorer.exe", str(folder)]
+    assert opened[0][1]["shell"] is False
+    assert opened[0][1].get("creationflags", 0) == _expected_hidden_flags(system_control)
+    _, metadata = registrations[0]
+    assert metadata["pid"] == 84
+    assert metadata["hwnd"] == 1001
+
+
+def test_generic_new_explorer_window_is_verified_by_process(monkeypatch, tmp_path):
+    folder = tmp_path / "Downloads"
+    folder.mkdir()
+    monkeypatch.setattr(
+        system_control,
+        "_native_window_snapshot",
+        lambda: [(1001, 84, "File Explorer")],
+    )
+    monkeypatch.setattr(system_control, "_native_process_name", lambda pid: "explorer.exe")
+    monkeypatch.setattr(
+        system_control,
+        "_matching_process_ids",
+        lambda _name: (_ for _ in ()).throw(AssertionError("psutil path used")),
+    )
+
+    assert system_control._find_new_folder_window(folder, set(), timeout=0.1) == (
+        84, 1001, "File Explorer",
+    )
+
+
+def test_generic_new_non_explorer_window_is_rejected(monkeypatch, tmp_path):
+    folder = tmp_path / "Downloads"
+    folder.mkdir()
+    monkeypatch.setattr(
+        system_control,
+        "_native_window_snapshot",
+        lambda: [(1001, 84, "File Explorer")],
+    )
+    monkeypatch.setattr(system_control, "_native_process_name", lambda pid: "notepad.exe")
+
+    assert system_control._find_new_folder_window(folder, set(), timeout=0.1) is None
 
 
 def test_coder_vscode_fallback_is_hidden(monkeypatch, tmp_path):

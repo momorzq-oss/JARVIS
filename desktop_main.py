@@ -9,8 +9,10 @@ launched with --debug. Normal mode opens a graphical window with no console.
     python desktop_main.py --debug    # GUI + console diagnostics
 """
 import argparse
+import concurrent.futures
 import os
 import sys
+import time
 
 
 _INSTANCE_MUTEX = None
@@ -124,17 +126,86 @@ def _parse_args(argv=None):
                    help="log live wake-word score/level/fps diagnostics")
     p.add_argument("--start-voice", action="store_true",
                    help="begin listening immediately after startup")
+    p.add_argument("--no-auto-voice", action="store_true",
+                   help="diagnostic launch: do not auto-start saved voice mode")
+    p.add_argument("--exit-after-seconds", type=float, default=0.0,
+                   help=argparse.SUPPRESS)
     return p.parse_args(argv)
+
+
+def _startup_preload_enabled(args):
+    """Keep the diagnostic preload switch authoritative for every path."""
+    return not bool(args.skip_model_preload)
+
+
+def _auto_voice_requested(args, settings):
+    return bool(
+        args.start_voice
+        or (settings.get("start_voice_automatically", False)
+            and not args.no_auto_voice)
+    )
+
+
+def _run_background_startup(
+    controller, bridge, registry_items,
+    *, auto_voice_requested=False, preload_enabled=True,
+    run_capability_scan=True,
+):
+    """Initialize latency-sensitive voice before optional health discovery.
+
+    Capability discovery imports and probes many optional integrations.  In a
+    frozen cold start it can take over a minute, but microphone readiness must
+    not depend on that non-critical inventory.  The order remains serialized:
+    audio initialization finishes before model preload and capability scans,
+    so native audio/model startup does not race those probes.
+    """
+    for message in (
+        "Loading configuration", "Loading microphone", "Loading Whisper",
+        "Loading wake word", "Loading Piper", "Loading browser support",
+        "Loading assistant backend",
+    ):
+        bridge.statusChanged.emit(message)
+    # Input readiness is independent of Piper's output-device probe.  On a
+    # cold Windows/PortAudio start that probe can take several seconds, so
+    # open the microphone and wake model first while still keeping all audio
+    # initialization serialized in this one worker.
+    voice_started = None
+    if auto_voice_requested:
+        voice_started = bool(controller.start_voice())
+    controller.apply_settings()
+    if auto_voice_requested:
+        bridge.autoVoiceStarted.emit(bool(voice_started))
+    if preload_enabled:
+        controller.preload_models()
+    if not run_capability_scan:
+        bridge.statusChanged.emit("Ready")
+        bridge.registry.emit(registry_items())
+        bridge.startupCompleted.emit()
+        return
+    _finish_background_startup(controller, bridge, registry_items)
+
+
+def _finish_background_startup(controller, bridge, registry_items):
+    """Run non-critical inventory after latency-sensitive startup settles."""
+    controller.start_capability_scan()
+    bridge.statusChanged.emit("Ready")
+    bridge.registry.emit(registry_items())
+    bridge.startupCompleted.emit()
 
 
 def main(argv=None):
     args = _parse_args(argv)
+    startup_started = time.perf_counter()
 
     if not _acquire_single_instance():
         return 0
 
-    from PySide6.QtCore import Qt, QTimer
-    from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+    from PySide6.QtCore import QCoreApplication, Qt, QTimer
+    from PySide6.QtGui import QColor, QFont, QPalette
+    from PySide6.QtWidgets import (
+        QApplication, QLabel, QProgressBar, QSystemTrayIcon, QVBoxLayout,
+        QWidget,
+    )
 
     from config import Config, ensure_dirs
     from core.settings import SettingsStore
@@ -147,14 +218,89 @@ def main(argv=None):
     ensure_dirs()
     _attach_hidden_stdio(Config.LOG_DIR)
 
+    # A no-console launch must leave actionable evidence if native imports or
+    # widget construction stalls before the window is shown.  Cancel the
+    # watchdog immediately after first paint so normal runtime stays quiet.
+    import faulthandler
+    startup_trace = open(
+        Config.LOG_DIR / "startup_stack.log", "a", encoding="utf-8", buffering=1
+    )
+    faulthandler.enable(file=startup_trace)
+    faulthandler.dump_traceback_later(30, repeat=True, file=startup_trace)
+
+    from voice import audio_log
+
+    def startup_phase(name):
+        audio_log.log(
+            f"Desktop startup phase: {name} "
+            f"({time.perf_counter() - startup_started:.3f}s)"
+        )
+
     app = QApplication(sys.argv[:1])
+    startup_phase("QApplication created")
     app.setApplicationName("JARVIS")
     app.setQuitOnLastWindowClosed(False)   # live in tray after window closes
 
     settings = SettingsStore()
-    app.setStyleSheet(styles.theme_stylesheet(
-        bool(settings.get("reduce_motion", False))
-    ))
+    auto_voice_requested = _auto_voice_requested(args, settings)
+    app.setStyle("Fusion")
+    application_palette = app.palette()
+    application_palette.setColor(QPalette.Window, QColor(styles.BG_DEEP))
+    application_palette.setColor(QPalette.WindowText, QColor(styles.TEXT))
+    application_palette.setColor(QPalette.Base, QColor("#07101D"))
+    application_palette.setColor(QPalette.AlternateBase, QColor(styles.BG_PANEL_SOLID))
+    application_palette.setColor(QPalette.Text, QColor(styles.TEXT))
+    application_palette.setColor(QPalette.Button, QColor(styles.BG_PANEL_SOLID))
+    application_palette.setColor(QPalette.ButtonText, QColor(styles.TEXT))
+    application_palette.setColor(QPalette.Highlight, QColor(styles.CYAN))
+    application_palette.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
+    application_palette.setColor(QPalette.ToolTipBase, QColor(styles.BG_PANEL_SOLID))
+    application_palette.setColor(QPalette.ToolTipText, QColor(styles.TEXT))
+    app.setPalette(application_palette)
+    app.setFont(QFont("Segoe UI", 9))
+    startup_phase("theme prepared")
+
+    # Paint a real, dark, responsive surface before loading native audio,
+    # automation, provider, or the large mission-control widget tree.
+    startup_window = QWidget()
+    startup_window.setWindowTitle("JARVIS · Starting")
+    startup_window.setMinimumSize(620, 260)
+    startup_palette = startup_window.palette()
+    startup_palette.setColor(QPalette.Window, QColor("#050A12"))
+    startup_palette.setColor(QPalette.WindowText, QColor("#D9EAF4"))
+    startup_palette.setColor(QPalette.Highlight, QColor("#00D1FF"))
+    startup_window.setPalette(startup_palette)
+    startup_window.setAutoFillBackground(True)
+    startup_layout = QVBoxLayout(startup_window)
+    startup_layout.setContentsMargins(54, 48, 54, 48)
+    startup_title = QLabel("J A R V I S")
+    startup_title.setObjectName("startupTitle")
+    startup_title.setFont(QFont("Consolas", 30, QFont.Bold))
+    title_palette = startup_title.palette()
+    title_palette.setColor(QPalette.WindowText, QColor("#8AECFF"))
+    startup_title.setPalette(title_palette)
+    startup_status_label = QLabel("Loading trusted desktop services")
+    startup_status_label.setObjectName("startupStatus")
+    startup_status_label.setFont(QFont("Segoe UI", 13))
+    status_palette = startup_status_label.palette()
+    status_palette.setColor(QPalette.WindowText, QColor("#83DFF0"))
+    startup_status_label.setPalette(status_palette)
+    startup_progress_bar = QProgressBar()
+    startup_progress_bar.setRange(0, 0)
+    startup_layout.addStretch(1)
+    startup_layout.addWidget(startup_title)
+    startup_layout.addWidget(startup_status_label)
+    startup_layout.addWidget(startup_progress_bar)
+    startup_layout.addStretch(1)
+    startup_window.show()
+    startup_window.raise_()
+    startup_window.activateWindow()
+    app.processEvents()
+    startup_phase("startup shell shown")
+
+    def update_startup(message):
+        startup_status_label.setText(str(message))
+        app.processEvents()
 
     # ---- startup status ------------------------------------------------
     def startup_status(msg):
@@ -162,17 +308,82 @@ def main(argv=None):
         window.status_chip.setText(msg.upper())
 
     # ---- controller + window ---------------------------------------------
-    gui_controller = GuiController(skip_preload=args.skip_model_preload,
+    update_startup("Initializing Windows audio safely")
+    try:
+        from voice.devices import initialize_audio_backend
+        initialize_audio_backend()
+        audio_log.log("Windows audio backend initialized on main thread")
+    except Exception as exc:
+        # Voice startup will report the same actionable error while typed
+        # commands and the GUI remain usable.
+        audio_log.log_error(f"Windows audio backend unavailable: {exc}", exc)
+    app.processEvents()
+    update_startup("Loading command, voice, and automation services")
+
+    def build_controller():
+        from core.assistant_controller import AssistantController
+        built_controller = AssistantController(
+            skip_preload=args.skip_model_preload, debug=args.debug
+        )
+        return built_controller
+
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="JARVIS-Startup"
+    ) as startup_pool:
+        controller_future = startup_pool.submit(build_controller)
+        while not controller_future.done():
+            app.processEvents()
+            time.sleep(0.02)
+        controller = controller_future.result()
+
+    gui_controller = GuiController(controller=controller,
+                                   skip_preload=args.skip_model_preload,
                                    debug=args.debug)
+    startup_phase("GUI controller created")
+    startup_watchdog_active = {"value": True}
+
+    def finish_startup_watchdog():
+        if not startup_watchdog_active["value"]:
+            return
+        startup_watchdog_active["value"] = False
+        faulthandler.cancel_dump_traceback_later()
+        try:
+            startup_trace.close()
+        except Exception:
+            pass
+
+    # Keep diagnostic stacks enabled through the native voice/background
+    # startup, not merely until the first frame has painted.
+    gui_controller.bridge.startupCompleted.connect(finish_startup_watchdog)
     gui_controller.controller.voice_diagnostic = args.voice_diagnostic
-    gui_controller.controller.attach_settings(settings)
-    window = MainWindow(gui_controller, settings)
+    gui_controller.controller.attach_settings(settings, initialize_audio=False)
+    startup_phase("settings attached")
+    update_startup("Building cinematic mission control")
+    window = MainWindow(
+        gui_controller, settings, startup_progress=update_startup
+    )
+    startup_phase("main window constructed")
+    # The application palette already guarantees a dark first frame without
+    # invoking Qt's expensive native stylesheet selector engine.
+    window.setAutoFillBackground(True)
     window.showMaximized()
+    app.processEvents()
+    startup_window.close()
+    startup_phase("main window shown")
     startup_status("Starting JARVIS")
+
+    def apply_cinematic_theme():
+        app.setPalette(application_palette)
+        startup_phase("cinematic theme applied")
+        gui_controller.run_async(run_startup)
+        startup_phase("background startup scheduled")
+
+    QTimer.singleShot(50, apply_cinematic_theme)
 
     # ---- tray --------------------------------------------------------------
     tray = TrayIcon(app)
     tray.show()
+    startup_phase("tray ready")
 
     # ---- settings window ------------------------------------------------------
     # Keep a persistent reference so the dialog is never garbage-collected.
@@ -239,22 +450,22 @@ def main(argv=None):
     tray.muteRequested.connect(tray_mute)
 
     # ---- staged background startup ---------------------------------------------
-    stages = [
-        "Loading configuration", "Loading microphone", "Loading Whisper",
-        "Loading wake word", "Loading Piper", "Loading browser support",
-        "Loading assistant backend",
-    ]
+    if auto_voice_requested:
+        gui_controller.bridge.autoVoiceStarted.connect(
+            window._on_auto_voice_started
+        )
 
     def run_startup():
-        for msg in stages:
-            # marshal to GUI thread via the bridge status signal
-            gui_controller.bridge.statusChanged.emit(msg)
-        gui_controller.controller.preload_models()
-        gui_controller.controller.start_capability_scan()
-        gui_controller.bridge.statusChanged.emit("Ready")
-        gui_controller.bridge.registry.emit(gui_controller.registry_items())
-
-    gui_controller.run_async(run_startup)
+        _run_background_startup(
+            gui_controller.controller,
+            gui_controller.bridge,
+            gui_controller.registry_items,
+            auto_voice_requested=auto_voice_requested,
+            preload_enabled=(
+                _startup_preload_enabled(args) and not auto_voice_requested
+            ),
+            run_capability_scan=not auto_voice_requested,
+        )
 
     # speak the greeting only once the GUI is visible
     def greet():
@@ -264,23 +475,43 @@ def main(argv=None):
         except Exception:
             pass
 
-    QTimer.singleShot(1200, greet)
-
-    if args.start_voice or settings.get("start_voice_automatically", False):
-        QTimer.singleShot(2000, window._on_start_voice)
+    if auto_voice_requested:
+        window.autoVoiceReady.connect(lambda _started: greet())
+    else:
+        QTimer.singleShot(1200, greet)
 
     # ---- shutdown ----------------------------------------------------------
+    exit_started = False
+
     def full_exit():
+        nonlocal exit_started
+        if exit_started:
+            return
+        exit_started = True
+        finish_startup_watchdog()
         startup_status("Powering down")
+        audio_log.log("Desktop full exit requested")
+        try:
+            window.prepare_shutdown()
+        except Exception:
+            pass
         try:
             gui_controller.shutdown()
         except Exception:
             pass
         tray.hide()
+        app.setQuitOnLastWindowClosed(True)
+        window.hide()
+        audio_log.log("Desktop requesting Qt event-loop exit")
         app.quit()
+        QCoreApplication.exit(0)
 
     window.exitRequested.connect(full_exit)
     tray.exitRequested.connect(full_exit)
+    if args.exit_after_seconds > 0:
+        QTimer.singleShot(
+            max(1, int(args.exit_after_seconds * 1000)), full_exit,
+        )
 
     # intercept window close -> minimize to tray
     original_close = window.closeEvent
@@ -294,12 +525,27 @@ def main(argv=None):
 
     window.closeEvent = close_event
 
+    startup_phase("entering Qt event loop")
     exit_code = app.exec()
+    audio_log.log(f"Desktop Qt event loop exited with code {exit_code}")
     activation_timer.stop()
     try:
         gui_controller.shutdown()
     except Exception:
         pass
+    audio_log.log("Desktop final teardown complete")
+    # PyInstaller applications load several native audio/ML runtimes.  Their
+    # process-finalizer threads can occasionally remain suspended by Windows
+    # even after Qt and every JARVIS service have shut down.  At this point all
+    # application-owned resources are already closed, so bypass interpreter
+    # finalizers in the frozen build to guarantee that Exit really exits.
+    if getattr(sys, "frozen", False):
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os._exit(int(exit_code))
     return exit_code
 
 

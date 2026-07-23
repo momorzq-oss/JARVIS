@@ -19,6 +19,14 @@ from difflib import get_close_matches
 from pathlib import Path
 
 
+def _native_window_closed(user32, hwnd):
+    """A hidden AppFrame is closed even if Windows retains its host HWND."""
+    return (
+        not bool(user32.IsWindow(int(hwnd)))
+        or not bool(user32.IsWindowVisible(int(hwnd)))
+    )
+
+
 class SessionRegistry:
     def __init__(self, path):
         self.path = Path(path)
@@ -233,7 +241,8 @@ class SessionRegistry:
                 return None
             entry = live[-1]
             ok = self._close_entry(entry)
-            self._remove(entry["id"])
+            if ok:
+                self._remove(entry["id"])
             return {"entry": self._enrich(entry), "closed": ok}
 
     def close_recent(self):
@@ -251,7 +260,8 @@ class SessionRegistry:
         results = []
         for entry in self.find_by_name(name):
             ok = self._close_entry(entry)
-            self._remove(entry["id"])
+            if ok:
+                self._remove(entry["id"])
             results.append({"entry": self._enrich(entry), "closed": ok})
         return results
 
@@ -261,9 +271,28 @@ class SessionRegistry:
             live = [e for e in self._entries if self._still_alive(e)]
         for entry in reversed(live):          # newest first
             ok = self._close_entry(entry)
-            self._remove(entry["id"])
+            if ok:
+                self._remove(entry["id"])
             results.append({"entry": self._enrich(entry), "closed": ok})
         return results
+
+    def discard_types(self, resource_types):
+        """Forget already-closed runtime resources without invoking closers."""
+        wanted = {str(item) for item in resource_types}
+        with self._lock:
+            removed = [
+                entry for entry in self._entries
+                if entry.get("runtime_session_id") == self.session_id
+                and entry.get("type") in wanted
+            ]
+            removed_ids = {entry["id"] for entry in removed}
+            self._entries = [
+                entry for entry in self._entries if entry["id"] not in removed_ids
+            ]
+            for entry_id in removed_ids:
+                self._runtime.pop(entry_id, None)
+            self._save()
+        return len(removed)
 
     def _remove(self, entry_id):
         with self._lock:
@@ -302,9 +331,15 @@ class SessionRegistry:
             try:
                 import ctypes
                 WM_CLOSE = 0x0010
-                if ctypes.windll.user32.IsWindow(int(hwnd)):
-                    ctypes.windll.user32.PostMessageW(int(hwnd), WM_CLOSE, 0, 0)
-                    return True
+                user32 = ctypes.windll.user32
+                if user32.IsWindow(int(hwnd)):
+                    user32.PostMessageW(int(hwnd), WM_CLOSE, 0, 0)
+                    import time
+                    deadline = time.time() + 3.0
+                    while (time.time() < deadline
+                           and not _native_window_closed(user32, hwnd)):
+                        time.sleep(0.05)
+                    return _native_window_closed(user32, hwnd)
             except Exception:
                 pass
 

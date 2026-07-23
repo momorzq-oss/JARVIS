@@ -68,11 +68,11 @@ class StatusIndicator(QFrame):
     def __init__(self, name: str, parent=None):
         super().__init__(parent)
         self.setObjectName("statusIndicator")
-        self.setFixedWidth(84)
+        self.setFixedWidth(78)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         root = QHBoxLayout(self)
-        root.setContentsMargins(8, 5, 8, 5)
-        root.setSpacing(6)
+        root.setContentsMargins(6, 5, 6, 5)
+        root.setSpacing(5)
         self.dot = QLabel("●")
         self.dot.setObjectName("statusDot")
         labels = QVBoxLayout()
@@ -85,9 +85,12 @@ class StatusIndicator(QFrame):
         labels.addWidget(self.value_label)
         root.addWidget(self.dot)
         root.addLayout(labels)
-        self.set_state("WAITING")
+        # The widget has not been inserted or painted yet. Re-polishing a
+        # complex application stylesheet here once per subsystem makes cold
+        # construction scale catastrophically on Windows.
+        self.set_state("WAITING", repolish=False)
 
-    def set_state(self, value):
+    def set_state(self, value, repolish=True):
         state = normalize_state(value)
         self.value_label.setText(state)
         state_class = (
@@ -101,8 +104,9 @@ class StatusIndicator(QFrame):
             else "ready"
         )
         self.setProperty("hudState", state_class)
-        self.style().unpolish(self)
-        self.style().polish(self)
+        if repolish:
+            self.style().unpolish(self)
+            self.style().polish(self)
 
 
 class SubsystemStatusBar(QScrollArea):
@@ -112,7 +116,7 @@ class SubsystemStatusBar(QScrollArea):
         ("Voice", "voice"),
         ("Wake Word", "wake"),
         ("Whisper", "whisper"),
-        ("OpenRouter Safety", "kimi"),
+        ("OpenRouter", "kimi"),
         ("Hermes", "hermes"),
         ("Desktop Agent", "desktop_agent"),
         ("Browser", "browser"),
@@ -129,13 +133,13 @@ class SubsystemStatusBar(QScrollArea):
         super().__init__(parent)
         self.setObjectName("subsystemRail")
         self.setWidgetResizable(True)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setFixedHeight(60)
+        self.setFixedHeight(64)
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(5)
+        layout.setSpacing(4)
         self.indicators = {}
         for name, key in self.SUBSYSTEMS:
             indicator = StatusIndicator(name)

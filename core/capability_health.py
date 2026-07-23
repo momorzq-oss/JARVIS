@@ -1,5 +1,8 @@
 """Non-destructive health checks for discovered JARVIS capabilities."""
+import ctypes
 import importlib.util
+import shutil
+import threading
 from dataclasses import dataclass
 
 from config import Config
@@ -123,29 +126,48 @@ class CapabilityHealth:
         return HealthResult(WORKING, "Implementation available", tuple(dependencies))
 
     def system_metrics(self):
+        """Collect bounded local metrics without process-enumeration APIs.
+
+        Importing psutil on Windows immediately performs per-CPU native
+        queries.  Those calls can block indefinitely on a damaged performance
+        counter provider while holding Python execution, which used to freeze
+        JARVIS during every mission-control refresh.  Memory and disk values
+        below come from constant-time OS/stdlib calls; unavailable values are
+        reported honestly instead of risking the GUI.
+        """
         try:
-            import psutil
-            memory = psutil.virtual_memory()
-            disk = psutil.disk_usage(str(Config.BASE_DIR.anchor or "C:\\"))
-            network = psutil.net_io_counters()
-            temperature_reader = getattr(psutil, "sensors_temperatures", None)
-            temperatures = (
-                temperature_reader(fahrenheit=False)
-                if callable(temperature_reader) else {}
+            ram_percent = None
+            if hasattr(ctypes, "windll"):
+                class MemoryStatus(ctypes.Structure):
+                    _fields_ = [
+                        ("dwLength", ctypes.c_ulong),
+                        ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong),
+                        ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong),
+                        ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong),
+                        ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                    ]
+
+                memory = MemoryStatus()
+                memory.dwLength = ctypes.sizeof(MemoryStatus)
+                if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(memory)):
+                    ram_percent = float(memory.dwMemoryLoad)
+
+            disk = shutil.disk_usage(str(Config.BASE_DIR.anchor or "C:\\"))
+            disk_percent = (
+                round((disk.used / disk.total) * 100.0, 1) if disk.total else None
             )
-            temperature = None
-            for readings in temperatures.values():
-                if readings:
-                    temperature = readings[0].current
-                    break
             return {
-                "cpu_percent": psutil.cpu_percent(interval=None),
-                "ram_percent": memory.percent,
-                "disk_percent": disk.percent,
-                "network_sent_bytes": network.bytes_sent,
-                "network_received_bytes": network.bytes_recv,
-                "temperature_c": temperature,
-                "python_threads": psutil.Process().num_threads(),
+                "cpu_percent": None,
+                "ram_percent": ram_percent,
+                "disk_percent": disk_percent,
+                "network_sent_bytes": None,
+                "network_received_bytes": None,
+                "temperature_c": None,
+                "python_threads": threading.active_count(),
                 "gpu_percent": None,
                 "vram_percent": None,
                 "status": WORKING,

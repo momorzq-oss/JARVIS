@@ -109,6 +109,18 @@ class SpeechOutputService:
         except Exception:
             pass
 
+    def close(self):
+        """Release Piper playback and its owned persistent synthesis worker."""
+        try:
+            if self.speaker is not None:
+                close = getattr(self.speaker, "close", None)
+                if callable(close):
+                    close()
+                else:
+                    self.speaker.stop()
+        except Exception:
+            pass
+
     def wait(self, timeout=None):
         if self.speaker is not None:
             return self.speaker.wait(timeout=timeout)

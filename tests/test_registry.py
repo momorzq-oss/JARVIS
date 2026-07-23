@@ -1,4 +1,4 @@
-from core.registry import SessionRegistry
+from core.registry import SessionRegistry, _native_window_closed
 from skills.system_control import close_thing
 
 
@@ -45,3 +45,39 @@ def test_previous_runtime_entries_are_not_owned_after_restart(tmp_path):
     second = SessionRegistry(path)
     assert second.get_status() == []
     assert second.close_all() == []
+
+
+def test_discard_types_removes_closed_runtime_resources_without_closer(tmp_path):
+    called = []
+    registry = SessionRegistry(tmp_path / "registry.json")
+    registry.register("browser", "Browser", closer=lambda: called.append(True))
+    registry.register("browser_tab", "Google", closer=lambda: called.append(True))
+    registry.register("app", "Calculator")
+
+    assert registry.discard_types({"browser", "browser_tab"}) == 2
+    assert called == []
+    assert [entry["name"] for entry in registry.list_open()] == ["Calculator"]
+
+
+def test_failed_close_retains_resource_for_truthful_retry(tmp_path):
+    registry = SessionRegistry(tmp_path / "registry.json")
+    entry = registry.register(
+        "document", "Unverified.xlsx",
+        extra={"close_policy": "unverified_ownership"},
+    )
+
+    result = registry.close_by_name("Unverified.xlsx")
+
+    assert result[0]["closed"] is False
+    assert registry.list_open()[0]["id"] == entry["id"]
+
+
+def test_hidden_appframe_counts_as_closed_without_killing_shared_host():
+    class User32:
+        def IsWindow(self, _hwnd):
+            return True
+
+        def IsWindowVisible(self, _hwnd):
+            return False
+
+    assert _native_window_closed(User32(), 1001) is True

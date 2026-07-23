@@ -44,6 +44,7 @@ class CapabilityRegistry:
         "organizer": "FILE_MODIFY",
         "ppt_skill": "OFFICE_EDIT",
         "research": "BROWSER_NAVIGATE",
+        "university_assignment": "OFFICE_EDIT",
         "system_control": "DESKTOP_CONTROL",
         "whatsapp": "FORM_SUBMIT",
         "window_control": "DESKTOP_CONTROL",
@@ -68,6 +69,7 @@ class CapabilityRegistry:
         "desktop": "organizer",
         "codex": "coder",
         "research": "research",
+        "university": "university_assignment",
         "chat": "chat",
         "smalltalk": "chat",
     }

@@ -28,37 +28,39 @@ ACCOUNT_NAMES = ("gmail", "whatsapp")
 # names, QR contents, cookies, or other private text.
 _WHATSAPP_DESKTOP_PROBE = r'''
 import json
-from pywinauto import Desktop
+import ctypes
+import re
+from ctypes import wintypes
 
 out = {"visible": False, "connected": False, "detail": "WhatsApp Desktop window was not found."}
 try:
-    windows = Desktop(backend="uia").windows()
-    for window in windows:
-        title = (window.window_text() or "").strip()
-        if "whatsapp" not in title.lower():
-            continue
+    # Find matching top-level HWNDs with non-blocking User32 calls and inspect
+    # only their non-private title state.
+    matches = []
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def collect(hwnd, _lparam):
+        length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+        if length:
+            buffer = ctypes.create_unicode_buffer(length + 1)
+            ctypes.windll.user32.GetWindowTextW(hwnd, buffer, length + 1)
+            title = buffer.value.strip()
+            unread_state = re.match(r"^\(\d+\)\s+whatsapp", title, flags=re.I)
+            if ("whatsapp" in title.lower()
+                    and (ctypes.windll.user32.IsWindowVisible(hwnd) or unread_state)
+                    and not title.lower().startswith("gdi+ window")):
+                matches.append((int(hwnd), title))
+        return True
+    ctypes.windll.user32.EnumWindows(callback_type(collect), 0)
+    for handle, title in matches:
         out["visible"] = True
-        snippets = [title]
-        try:
-            for item in window.descendants(control_type="Text")[:100]:
-                text = (item.window_text() or "").strip()
-                if text:
-                    snippets.append(text)
-        except Exception:
-            pass
-        text = " ".join(snippets).lower()
-        login_markers = (
-            "scan the qr code", "link as companion device", "link with phone number",
-            "use whatsapp on your computer", "log in with phone number",
-        )
-        ready_markers = ("chats", "search", "archived", "communities", "status")
-        if any(marker in text for marker in login_markers):
-            out["detail"] = "WhatsApp Desktop is showing its sign-in screen."
-        elif any(marker in text for marker in ready_markers):
+        # An unread-count prefix is top-level, non-private evidence that the
+        # client has an active chat session. A plain WhatsApp title proves only
+        # that the app is open; never infer login from the process alone.
+        if re.match(r"^\(\d+\)\s+whatsapp", title, flags=re.I):
             out["connected"] = True
-            out["detail"] = "WhatsApp Desktop session verified."
+            out["detail"] = "WhatsApp Desktop signed-in session verified from its unread-count window state."
         else:
-            out["detail"] = "WhatsApp Desktop is open, but its signed-in session could not be verified yet."
+            out["detail"] = "WhatsApp Desktop is open, but its signed-in session could not be verified without inspecting private chat content."
         break
 except Exception as exc:
     out["detail"] = "WhatsApp Desktop verification could not inspect the application."

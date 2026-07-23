@@ -40,6 +40,12 @@ def test_browser_intent_precedes_generic_open_and_search_rules():
     assert intent["params"]["intent_group"] == "BROWSER_LOCAL"
 
 
+def test_tutorial_query_drops_request_scaffolding_but_keeps_topic():
+    intent = fast_lane("Play a useful tutorial about creating a local LLM")
+    assert intent["skill"] == "browser.search_youtube_and_play"
+    assert intent["params"]["query"] == "creating a local LLM"
+
+
 def test_youtube_context_resolves_a_follow_up_without_a_model():
     state = {"browser_context": {"destination": "youtube", "query": "creating a local LLM"}}
     intent = classify_browser_intent("Play the best one", state)

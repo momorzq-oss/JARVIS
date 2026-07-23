@@ -58,9 +58,16 @@ def _run_confirmation(qapp, controller, gui, callback=None, timeout=2.0):
         ),
         daemon=True,
     )
-    if callback is not None:
-        QTimer.singleShot(25, lambda: callback(gui._confirmation_dialog, thread, executed))
     thread.start()
+    if callback is not None:
+        def invoke_when_visible():
+            dialog = gui._confirmation_dialog
+            if dialog is not None and dialog.isVisible():
+                callback(dialog, thread, executed)
+            elif thread.is_alive():
+                QTimer.singleShot(5, invoke_when_visible)
+
+        QTimer.singleShot(0, invoke_when_visible)
     deadline = time.time() + timeout
     while thread.is_alive() and time.time() < deadline:
         qapp.processEvents()
@@ -84,6 +91,46 @@ def test_gui_confirmation_appears_and_approve_once(qapp, confirmation_env):
 
     result, executed = _run_confirmation(qapp, controller, gui, approve)
     assert result == "closed"
+    assert executed == [True]
+
+
+def test_gui_scheduling_delay_does_not_consume_user_response_time(
+    qapp, confirmation_env,
+):
+    controller, gui = confirmation_env
+    gui.confirmation_timeout_ms = 100
+    executed = []
+    result = []
+    intent = {"skill": "app.close", "params": {"target": "__all__"}}
+    thread = threading.Thread(
+        target=lambda: result.append(
+            controller.action_manager.execute_intent(
+                intent, lambda: executed.append(True) or "closed",
+            )
+        ),
+        daemon=True,
+    )
+    thread.start()
+
+    # Simulate a briefly busy Qt event loop for longer than the human response
+    # timeout.  The action must remain pending until its dialog is presented.
+    time.sleep(0.2)
+    assert thread.is_alive()
+    def approve_when_visible():
+        dialog = gui._confirmation_dialog
+        if dialog is not None and dialog.isVisible():
+            _button(dialog, "Approve Once").click()
+        elif thread.is_alive():
+            QTimer.singleShot(5, approve_when_visible)
+
+    QTimer.singleShot(0, approve_when_visible)
+    deadline = time.time() + 1.0
+    while thread.is_alive() and time.time() < deadline:
+        qapp.processEvents()
+        time.sleep(0.005)
+    thread.join(timeout=1.0)
+
+    assert result == ["closed"]
     assert executed == [True]
 
 
@@ -201,8 +248,14 @@ def test_sensitive_values_are_redacted_in_dialog(qapp, confirmation_env):
         assert "%USERPROFILE%" in labels
         _button(dialog, "Deny").click()
 
-    QTimer.singleShot(25, inspect_and_deny)
     thread.start()
+    def inspect_when_visible():
+        if gui._confirmation_dialog is not None and gui._confirmation_dialog.isVisible():
+            inspect_and_deny()
+        elif thread.is_alive():
+            QTimer.singleShot(5, inspect_when_visible)
+
+    QTimer.singleShot(0, inspect_when_visible)
     while thread.is_alive():
         qapp.processEvents()
         time.sleep(0.005)

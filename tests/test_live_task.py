@@ -1,5 +1,6 @@
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -100,3 +101,53 @@ def test_word_com_progressive_insertion(monkeypatch):
         ("heading", "References"),
     ]
     assert ctx.pending["kind"] == "save_document"
+
+
+def test_supplied_text_insert_and_save_use_active_word_service(tmp_path):
+    from types import SimpleNamespace
+
+    class Service:
+        def __init__(self):
+            self.inserted = []
+            self.saved = []
+
+        def insert_text(self, value):
+            self.inserted.append(value)
+
+        def save(self, path):
+            path.write_bytes(b"docx")
+            self.saved.append(path)
+
+    updates = []
+    service = Service()
+    ctx = SimpleNamespace(
+        state={"word_service": service, "active_office_entry": "word-1"},
+        registry=SimpleNamespace(
+            update_entry=lambda entry_id, **fields: updates.append((entry_id, fields)),
+        ),
+    )
+    target = tmp_path / "validation.docx"
+
+    assert "Inserted 4 words" in word_skill.insert_text("local Word text works", ctx)
+    assert "Saved and verified" in word_skill.save_document(target, ctx)
+    assert service.inserted == ["local Word text works"]
+    assert service.saved == [target]
+    assert target.is_file()
+    assert updates[-1][1]["unsaved_state"] == "saved"
+
+
+def test_explicit_word_save_clears_the_completed_save_followup(tmp_path):
+    class Service:
+        def save(self, path):
+            path.write_bytes(b"docx")
+
+    ctx = SimpleNamespace(
+        state={"word_service": Service()},
+        pending={"kind": "save_document", "request": object()},
+        registry=SimpleNamespace(update_entry=lambda *_args, **_kwargs: None),
+    )
+
+    result = word_skill.save_document(tmp_path / "completed.docx", ctx)
+
+    assert "Saved and verified" in result
+    assert ctx.pending is None

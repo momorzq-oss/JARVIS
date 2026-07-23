@@ -57,11 +57,11 @@ FAST_RULES = [
      lambda m: {"skill": "system.status", "params": {}}),
 
     # --- active task control ------------------------------------------------
-    (_rgx(r"^(?:pause typing|pause (?:the )?(?:current )?task)[.! ]*$"),
+    (_rgx(r"^(?:pause|pause typing|pause (?:the )?(?:current )?task)[.! ]*$"),
      lambda m: {"skill": "task.pause", "params": {}}),
-    (_rgx(r"^(?:resume typing|resume (?:the )?(?:current )?task)[.! ]*$"),
+    (_rgx(r"^(?:resume|resume typing|resume (?:the )?(?:current )?task)[.! ]*$"),
      lambda m: {"skill": "task.resume", "params": {}}),
-    (_rgx(r"^(?:cancel|stop) (?:the )?(?:current )?task[.! ]*$"),
+    (_rgx(r"^(?:cancel|(?:cancel|stop) (?:the )?(?:current )?task)[.! ]*$"),
      lambda m: {"skill": "task.cancel", "params": {}}),
     (_rgx(r"^(?:write|type) faster[.! ]*$"),
      lambda m: {"skill": "task.speed", "params": {"direction": "faster"}}),
@@ -204,18 +204,24 @@ FAST_RULES = [
 ]
 
 
-def fast_lane(text):
+def fast_lane(text, state=None):
     """Return an intent dict instantly, or None to fall through to the LLM router."""
     t = (text or "").strip()
     if not t:
         return None
-    # Browser navigation must be decided before the generic "open X" / "search
-    # X" rules below.  Otherwise flexible requests such as "open Google and
-    # look up local LLM education" become an application launch and can fall
-    # through to a cloud planner.
+    # The shared semantic classifier resolves folders, applications and
+    # Office/research compounds before browser language.  This prevents broad
+    # words such as "show", "find" and "watch" from stealing local commands.
+    try:
+        from core.automation_intents import classify_local_intent
+        local_intent = classify_local_intent(t, state)
+        if local_intent is not None:
+            return local_intent
+    except Exception:
+        pass
     try:
         from core.automation_intents import classify_browser_intent
-        browser_intent = classify_browser_intent(t)
+        browser_intent = classify_browser_intent(t, state)
         if browser_intent is not None:
             return browser_intent
     except Exception:
@@ -244,12 +250,12 @@ VALID_SKILLS = {
     "news.topic", "news.more", "news.save", "email.check", "email.read",
     "email.compose", "email.reply", "whatsapp.open", "whatsapp.read",
     "whatsapp.reply", "word.write", "word.continue", "office_word.create_document",
-    "office_word.create_research_document", "task.pause", "task.resume", "task.cancel", "task.speed", "excel.create",
+    "office_word.create_research_document", "office_word.insert_text", "office_word.save_document", "task.pause", "task.resume", "task.cancel", "task.speed", "excel.create",
     "excel.read", "ppt.create", "desktop.organize", "desktop.undo",
     "codex.build", "research.start", "research.create_report", "research.prepare_report",
     "research.gather_report", "research.draft_report", "research.finalize_report",
     "research.open_report", "research.continue", "research.finalize",
-    "research.outline", "chat", "smalltalk",
+    "research.outline", "university.assignment", "chat", "smalltalk",
     "window.front", "window.minimize", "window.maximize", "window.restore", "window.focus", "window.close",
     "system.emergency_stop", "office.create_document", "office.create_spreadsheet",
     "office.create_presentation", "office.save", "office.export",

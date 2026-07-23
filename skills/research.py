@@ -27,12 +27,82 @@ UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) JARVIS/1.0"}
 STAGES = ["TOPIC", "DISCUSS", "OUTLINE", "GATHER", "DRAFT", "DONE"]
 
 
+def clarify_research_topic(topic):
+    """Return a search/prompt topic with common ambiguous acronyms expanded.
+
+    The user's wording remains the display title.  Clarification is applied only
+    to retrieval and drafting, so a short acronym cannot silently steer source
+    selection toward an unrelated domain.
+    """
+    value = (topic or "").strip()
+    if not value:
+        return ""
+    if re.search(r"\bllms?\b", value, flags=re.I):
+        legal_context = re.search(
+            r"\b(?:master(?:'s)? of laws?|law degree|legal education|law school|"
+            r"jurisprudence|attorney|lawyer)\b", value, flags=re.I,
+        )
+        if not legal_context:
+            value = re.sub(
+                r"\bLLM(s?)\b",
+                lambda match: (
+                    "large language models (LLMs)" if match.group(1)
+                    else "large language model (LLM)"
+                ),
+                value,
+                flags=re.I,
+            )
+    return value
+
+
+def _working_topic(sess):
+    return sess.get("semantic_topic") or clarify_research_topic(sess.get("topic", ""))
+
+
+def _source_matches_context(sess, hit):
+    """Reject obvious homonyms before fetching or citing a search result."""
+    display_topic = sess.get("topic", "")
+    semantic_topic = _working_topic(sess)
+    searchable = " ".join((
+        hit.get("title", ""), hit.get("snippet", ""), hit.get("url", ""),
+    )).lower()
+
+    # LLM defaults to the technology meaning unless the user supplied explicit
+    # legal-degree context.  This catches results such as "Legal education in
+    # Hong Kong" that otherwise match only the generic word "education".
+    if semantic_topic != display_topic and re.search(r"\bllms?\b", display_topic, re.I):
+        technology_markers = (
+            "large language model", "language model", "artificial intelligence",
+            "generative ai", "machine learning", "ollama", "local inference",
+            "transformer", "hugging face",
+        )
+        if not any(marker in searchable for marker in technology_markers):
+            return False
+        legal_markers = ("master of laws", "law degree", "legal education", "law school")
+        if any(marker in searchable for marker in legal_markers):
+            return False
+
+    stopwords = {
+        "about", "analysis", "and", "education", "for", "from", "into",
+        "local", "models", "overview", "report", "research", "running",
+        "the", "their", "this", "with",
+    }
+    topic_words = {
+        word for word in re.findall(r"[a-z0-9]+", semantic_topic.lower())
+        if len(word) >= 3 and word not in stopwords
+    }
+    return not topic_words or bool(topic_words.intersection(
+        re.findall(r"[a-z0-9]+", searchable)
+    ))
+
+
 # ===========================================================================
 # Session persistence
 # ===========================================================================
 def _blank_session(topic):
     return {
         "topic": topic,
+        "semantic_topic": clarify_research_topic(topic),
         "stage": "DISCUSS",
         "created_at": time.time(),
         "discussion": [],          # list of {"role": user|jarvis, "text": ...}
@@ -187,11 +257,12 @@ def fetch_page_text(url, max_chars=3500):
 def gather_sources(sess, ctx, max_sources=10, progress_cb=None, checkpoint=None,
                    summarize_with_llm=True):
     """Search + fetch + take notes per source. Updates sess['sources']."""
-    queries = [sess["topic"]]
+    working_topic = _working_topic(sess)
+    queries = [working_topic]
     for sec in sess.get("outline", [])[:3]:
-        queries.append(f"{sess['topic']} {sec}")
+        queries.append(f"{working_topic} {sec}")
     if len(queries) < 3:
-        queries.append(sess["topic"] + " overview analysis")
+        queries.append(working_topic + " overview analysis")
 
     found = []
     seen = set()
@@ -212,10 +283,6 @@ def gather_sources(sess, ctx, max_sources=10, progress_cb=None, checkpoint=None,
             break
 
     sources = []
-    topic_words = {
-        word for word in re.findall(r"[a-z0-9]+", sess["topic"].lower())
-        if len(word) >= 4
-    }
     for hit in found:
         if checkpoint:
             checkpoint()
@@ -223,8 +290,7 @@ def gather_sources(sess, ctx, max_sources=10, progress_cb=None, checkpoint=None,
             break
         if progress_cb:
             progress_cb(f"Verifying source {len(sources) + 1}: {hit['title']}")
-        title_words = set(re.findall(r"[a-z0-9]+", hit["title"].lower()))
-        if topic_words and not topic_words.intersection(title_words):
+        if not _source_matches_context(sess, hit):
             continue
         text = fetch_page_text(hit["url"])
         if not text or len(text) < 300:
@@ -235,7 +301,7 @@ def gather_sources(sess, ctx, max_sources=10, progress_cb=None, checkpoint=None,
         if summarize_with_llm and ctx.llm.available:
             notes = ctx.llm.quick(
                 f"Extract 3 short bullet notes from this text, strictly relevant "
-                f"to the research topic \"{sess['topic']}\". Plain text, no markdown.\n\n"
+                f"to the research topic \"{working_topic}\". Plain text, no markdown.\n\n"
                 f"TEXT:\n{text[:2500]}",
                 max_tokens=220,
             )
@@ -268,8 +334,23 @@ def _sources_block(sess):
 
 
 def draft_section(sess, section, ctx, extra=""):
+    if not ctx.llm.available:
+        sources = sess.get("sources", [])
+        if not sources:
+            return ""
+        paragraphs = [
+            f"This section examines {section.lower()} for {_working_topic(sess)} "
+            f"using only the verified public sources collected by JARVIS."
+        ]
+        for index, source in enumerate(sources, 1):
+            notes = re.sub(r"\s+", " ", str(source.get("notes") or "")).strip()
+            if not notes:
+                continue
+            excerpt = notes[:420].rsplit(" ", 1)[0] if len(notes) > 420 else notes
+            paragraphs.append(f"{excerpt} [{index}]")
+        return "\n\n".join(paragraphs)
     prompt = RESEARCH_SECTION_PROMPT.format(
-        section=section, topic=sess["topic"], extra=extra,
+        section=section, topic=_working_topic(sess), extra=extra,
         sources=_sources_block(sess),
     )
     text = ctx.llm.quick(prompt, system=RESEARCH_SYSTEM_PROMPT.format(
@@ -289,20 +370,29 @@ def draft_all(sess, ctx, progress_cb=None, checkpoint=None):
         f"## {k}\n{v}" for k, v in sess["draft"].items())[:4000]
     if checkpoint:
         checkpoint()
-    abstract = ctx.llm.quick(
-        f"Write a 120-180 word abstract for this research document titled "
-        f"\"{sess['topic']}\". Plain prose, no markdown.\n\n{joined}",
-        max_tokens=350)
+    if ctx.llm.available:
+        abstract = ctx.llm.quick(
+            f"Write a 120-180 word abstract for this research document titled "
+            f"\"{_working_topic(sess)}\". Plain prose, no markdown.\n\n{joined}",
+            max_tokens=350)
+    else:
+        abstract = (
+            f"This source-grounded briefing reviews {_working_topic(sess)} "
+            f"across {len(sess.get('outline', []))} sections using "
+            f"{len(sess.get('sources', []))} verified public sources. "
+            "Because no generation provider was configured, JARVIS preserved "
+            "retrieved source evidence directly and did not add unsupported claims."
+        )
     sess["abstract"] = (abstract or "").strip()
     save_session(sess)
 
 
 def build_research_session(topic, ctx, max_sources=8, max_sections=6,
                            progress_cb=None, checkpoint=None,
-                           summarize_with_llm=True):
+                           summarize_with_llm=True, min_sources=3):
     """Build a source-grounded in-memory report for visible Office insertion."""
     topic = (topic or "").strip()
-    if not topic or not ctx.llm.available:
+    if not topic:
         return None
     sess = _blank_session(topic)
     save_session(sess)
@@ -316,7 +406,7 @@ def build_research_session(topic, ctx, max_sources=8, max_sections=6,
         progress_cb=progress_cb, checkpoint=checkpoint,
         summarize_with_llm=summarize_with_llm,
     )
-    if not sources:
+    if len(sources) < min(max_sources, max(1, min_sources)):
         return None
     sess["stage"] = "DRAFT"
     save_session(sess)
@@ -607,7 +697,7 @@ def _propose_outline(sess, ctx):
     discussion = "\n".join(
         f"{d['role']}: {d['text']}" for d in sess.get("discussion", [])[-12:])
     text = ctx.llm.quick(
-        RESEARCH_OUTLINE_PROMPT.format(topic=sess["topic"], discussion=discussion),
+        RESEARCH_OUTLINE_PROMPT.format(topic=_working_topic(sess), discussion=discussion),
         system=RESEARCH_SYSTEM_PROMPT.format(sources="(not gathered yet)"),
         max_tokens=600) if ctx.llm.available else ""
     sections = _parse_outline(text)
@@ -676,8 +766,6 @@ def create_report(topic, ctx):
     topic = (topic or "").strip()
     if not topic:
         return "Research what, sir?"
-    if not ctx.llm.available:
-        return "My research brain needs the OpenRouter key, sir."
     sess = _blank_session(topic)
     save_session(sess)
     _propose_outline(sess, ctx)
@@ -697,8 +785,6 @@ def prepare_report(topic, ctx):
     topic = (topic or "").strip()
     if not topic:
         return "Research what, sir?"
-    if not ctx.llm.available:
-        return "My research brain needs the OpenRouter key, sir."
     sess = _blank_session(topic)
     save_session(sess)
     _propose_outline(sess, ctx)

@@ -4,7 +4,7 @@ import pytest
 
 from config import Config
 from skills.desktop_automation import (
-    DesktopAdapterRegistry,
+    DesktopAdapterRegistry, ExcelAdapter, PowerPointAdapter,
     created_files_folder,
     descriptive_filename,
     unique_path,
@@ -61,3 +61,44 @@ def test_desktop_registry_exposes_dedicated_application_adapters():
 def test_unknown_desktop_adapter_is_rejected():
     with pytest.raises(ValueError, match="Unsupported desktop application adapter"):
         DesktopAdapterRegistry(_ctx()).get("unknown")
+
+
+def test_excel_creation_uses_deterministic_file_path_and_verified_launcher(tmp_path, monkeypatch):
+    from openpyxl import load_workbook
+
+    monkeypatch.setattr(Config, "CREATED_FILES_DIR", tmp_path)
+    opened = []
+    monkeypatch.setattr(
+        "skills.system_control.open_owned_file_in_application",
+        lambda path, application, _ctx: opened.append((path, application)) or True,
+    )
+    ctx = _ctx()
+    result = ExcelAdapter(ctx).create_spreadsheet("monthly budget tracker")
+
+    path = tmp_path / "Excel" / "Monthly Budget Tracker.xlsx"
+    assert result.status == "success"
+    assert opened == [(path, "Microsoft Excel")]
+    workbook = load_workbook(path, data_only=False)
+    assert workbook.active["D2"].value == "=B2-C2"
+    assert workbook.active["B6"].value == "=SUM(B2:B5)"
+    workbook.close()
+
+
+def test_powerpoint_creation_uses_deterministic_file_path_and_verified_launcher(tmp_path, monkeypatch):
+    from pptx import Presentation
+
+    monkeypatch.setattr(Config, "CREATED_FILES_DIR", tmp_path)
+    opened = []
+    monkeypatch.setattr(
+        "skills.system_control.open_owned_file_in_application",
+        lambda path, application, _ctx: opened.append((path, application)) or True,
+    )
+    ctx = _ctx()
+    result = PowerPointAdapter(ctx).create_presentation("local AI", slides=5)
+
+    path = tmp_path / "PowerPoint" / "Local Ai Presentation.pptx"
+    assert result.status == "success"
+    assert opened == [(path, "Microsoft PowerPoint")]
+    presentation = Presentation(path)
+    assert len(presentation.slides) == 5
+    assert presentation.slides[0].shapes.title.text == "Local Ai"

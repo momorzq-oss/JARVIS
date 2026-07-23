@@ -27,10 +27,14 @@ htmlcov/
 node_modules/
 
 # Build and release output
-build/
+build/*
+!build/build_exe_watchdog.ps1
+!build/hooks/
+!build/hooks/*.py
 dist/
 release/
 *.spec
+!JARVIS-GUI.spec
 
 # Local application data and downloaded models
 data/browser_profile/
@@ -44,6 +48,8 @@ data/*.json
 
 # Logs, backups, and temporary files
 .backups/
+audit/
+JARVIS_FULL_COMMAND_FAILURE_SNAPSHOT.md
 .test_tmp/
 logs/
 log/

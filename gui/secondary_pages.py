@@ -199,6 +199,54 @@ class ResearchPage(QWidget):
                 self.values[key].setText(str(metadata.get(key, "Unavailable")))
 
 
+class UniversityAssignmentPage(QWidget):
+    """Read-only mission-control view of the authoritative assignment state."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        root = QHBoxLayout(self)
+        specification = HudPanel("University Assignment")
+        self.values = {}
+        form = QFormLayout()
+        for label, key in (
+            ("ASSIGNMENT TYPE", "assignment_type"),
+            ("TOPIC", "topic"),
+            ("WORD COUNT", "word_count"),
+            ("CITATION STYLE", "citation_style"),
+            ("ACADEMIC LEVEL", "academic_level"),
+            ("CURRENT SECTION", "current_section"),
+            ("SOURCE COUNT", "source_count"),
+            ("REFERENCE COUNT", "reference_count"),
+            ("MILESTONE STAGE", "milestone_stage"),
+            ("SAVE STATUS", "save_status"),
+        ):
+            self.values[key] = _value("Waiting")
+            form.addRow(label, self.values[key])
+        specification.content.addLayout(form)
+        root.addWidget(specification, 3)
+
+        execution = HudPanel("Assignment Progress")
+        self.status = _value("Waiting for an assignment request")
+        self.progress = QProgressBar()
+        execution.content.addWidget(self.status)
+        execution.content.addWidget(self.progress)
+        execution.content.addStretch(1)
+        root.addWidget(execution, 2)
+
+    def set_snapshot(self, snapshot):
+        data = snapshot.get("university_assignment", {}) if isinstance(snapshot, dict) else {}
+        data = data if isinstance(data, dict) else {}
+        for key, label in self.values.items():
+            value = data.get(key)
+            label.setText(str(value if value not in (None, "") else "Waiting"))
+        progress = int(data.get("progress") or 0)
+        self.progress.setValue(max(0, min(100, progress)))
+        self.status.setText(
+            f"{data.get('requested_mode', 'Waiting')} · {progress}%"
+            if data else "Waiting for an assignment request"
+        )
+
+
 class AutomationPage(QWidget):
     emergencyStopRequested = Signal()
     closeSelectedRequested = Signal(str)

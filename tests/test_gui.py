@@ -1,6 +1,7 @@
 ﻿"""GUI tests (offscreen). Verify the window builds, panels update, and the
 application list reflects the session registry without blocking the GUI."""
 import os
+import threading
 import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -16,6 +17,7 @@ from core.settings import SettingsStore
 from gui import styles
 from gui.workers import GuiController
 from gui.main_window import MainWindow
+from gui.widgets.hud import StatusIndicator
 
 from tests.test_controller import make_ctx
 
@@ -34,6 +36,9 @@ def window(qapp, tmp_path):
     gc = GuiController(controller=None, skip_preload=True, debug=True)
     # swap the heavy ctx for the lightweight fake
     gc.controller.ctx = make_ctx()
+    gc.controller.status_snapshot = lambda: {
+        "state": "ready", "system_metrics": {}, "sessions": 0,
+    }
     w = MainWindow(gc, settings)
     yield w
     w.close()
@@ -44,6 +49,20 @@ def test_window_builds_with_all_buttons(window):
     for attr in ("btn_start", "btn_stop", "btn_mute", "btn_browser", "btn_files",
                  "btn_logs", "btn_settings", "btn_send", "btn_min", "btn_exit"):
         assert hasattr(window, attr), attr
+
+
+def test_status_indicator_initializes_without_forced_repolish(qapp, monkeypatch):
+    calls = []
+    original = StatusIndicator.set_state
+
+    def observed(self, value, repolish=True):
+        calls.append((value, repolish))
+        return original(self, value, repolish=repolish)
+
+    monkeypatch.setattr(StatusIndicator, "set_state", observed)
+    indicator = StatusIndicator("Voice")
+    assert calls == [("WAITING", False)]
+    assert indicator.property("hudState") == "warning"
 
 
 def test_window_title_and_core(window):
@@ -99,6 +118,40 @@ def test_send_button_submits_typed_command(window, monkeypatch):
     window._on_send()
     assert submitted == ["open downloads"]
     assert window.input.text() == ""
+
+
+def test_command_shortcut_focuses_shared_input(window):
+    window._show_page("settings")
+    window.input.setText("replace me")
+    window._focus_command_input()
+    assert window.pages.currentWidget() is window.dashboard
+    assert window.input.selectedText() == "replace me"
+
+
+def test_status_refresh_never_blocks_gui_thread(window, monkeypatch):
+    deadline = time.monotonic() + 1
+    while window.gc._status_refresh_pending and time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert window.gc._status_refresh_pending is False
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_status():
+        entered.set()
+        release.wait(timeout=2)
+        return {"state": "ready", "system_metrics": {}}
+
+    monkeypatch.setattr(window.gc.controller, "status_snapshot", slow_status)
+    started = time.perf_counter()
+    assert window.gc.refresh_status_async() is True
+    elapsed = time.perf_counter() - started
+    try:
+        assert elapsed < 0.25
+        assert entered.wait(timeout=1)
+        assert window.gc.refresh_status_async() is False
+    finally:
+        release.set()
 
 
 def test_voice_toggle_calls_controller(window, monkeypatch):

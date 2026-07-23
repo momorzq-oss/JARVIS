@@ -45,6 +45,7 @@ class AssistantController:
         self.skip_preload = skip_preload
         self._callbacks = {}
         self._lock = threading.RLock()
+        self._shutdown_event = threading.Event()
         self._state = STATE_IDLE
         self._last_command = ""
         self._last_response = ""
@@ -73,6 +74,7 @@ class AssistantController:
         self.speaker = self.speech
 
         self.voice_engine = None      # created on first Start Voice, then reused
+        self._preloaded_wake_engine = None
         self.agent = DesktopAgent(self)
         self.agent.set_status_callback(lambda s, d: self._emit('agentstatus', s, d))
         self.action_manager = ActionManager(self) # Initialize ActionManager
@@ -110,9 +112,10 @@ class AssistantController:
         self._emit("state", state, detail)
 
     # ---------------------------------------------------------------- settings
-    def attach_settings(self, settings_store):
+    def attach_settings(self, settings_store, initialize_audio=True):
         self._settings = settings_store
-        self.apply_settings()
+        if initialize_audio:
+            self.apply_settings()
 
     def apply_settings(self):
         """Apply runtime-safe settings without restarting JARVIS."""
@@ -154,6 +157,14 @@ class AssistantController:
             snap["last_command"] = self._last_command
             snap["last_response"] = self._last_response
             snap["current_task"] = self._current_task
+            context_state = getattr(self.ctx, "state", {})
+            assignment_state = (
+                context_state.get("university_assignment")
+                if isinstance(context_state, dict) else None
+            )
+            snap["university_assignment"] = (
+                dict(assignment_state) if isinstance(assignment_state, dict) else {}
+            )
             openrouter_ready = getattr(self.ctx.llm, "available", False)
             snap["openrouter"] = "ready" if openrouter_ready else "requires configuration"
             snap["openrouter_model"] = Config.OPENROUTER_MODEL
@@ -210,6 +221,10 @@ class AssistantController:
         try:
             self.capability_registry.discover()
             self.capability_registry.run_health_checks()
+            # This is an explicit/background maintenance operation.  External
+            # Hermes metadata is refreshed here, never in the frequent GUI
+            # status snapshot.
+            self.unified_tool_catalog.refresh()
             self._emit("capabilities", self.capability_registry.report())
             return True
         except Exception as exc:
@@ -246,11 +261,14 @@ class AssistantController:
 
     def _registry_command(self, cleaned):
         command = cleaned.strip().lower()
+        if command.startswith("/trace "):
+            from core.command_trace import format_trace
+            return format_trace(cleaned.strip()[7:].strip(), self.ctx)
         if command not in {"/help", "/skills", "/status", "/capabilities", "/selftest"}:
             return None
         if command == "/help":
             return ("Registry commands: /help, /skills, /status, "
-                    "/capabilities, /selftest")
+                    "/capabilities, /selftest, /trace <command>")
         if command == "/skills":
             return self.capability_registry.skills_text()
         if command == "/capabilities":
@@ -285,8 +303,37 @@ class AssistantController:
     def voice_running(self):
         return self.voice_engine is not None and self.voice_engine.running
 
+    def preload_wake_model(self):
+        """Load the local wake model while the visible startup shell is shown."""
+        if self._shutdown_event.is_set():
+            return False
+        try:
+            with self._lock:
+                if self._preloaded_wake_engine is None:
+                    from voice.wakeword import WakeWordEngine
+                    self._preloaded_wake_engine = WakeWordEngine(
+                        model_name=Config.WAKE_WORD,
+                        threshold=Config.WAKE_THRESHOLD,
+                    )
+                wake_engine = self._preloaded_wake_engine
+            loaded = bool(wake_engine._ensure_loaded())
+            if loaded:
+                audio_log.log("Controller: wake model preloaded")
+            else:
+                audio_log.log_error(
+                    "Controller: wake model preload failed",
+                    wake_engine.load_error,
+                )
+            return loaded
+        except Exception as exc:
+            audio_log.log_error(f"Controller: wake model preload failed: {exc}", exc)
+            return False
+
     def start_voice(self):
         audio_log.log("Controller: Start Voice requested")
+        if self._shutdown_event.is_set():
+            audio_log.log("Controller: Start Voice ignored during shutdown")
+            return False
         if self.voice_running:
             self._emit("status", "Voice is not running")
             return True
@@ -300,17 +347,26 @@ class AssistantController:
         self.state.update(selected_microphone=mic["name"], microphone_available=True)
         self._set_state(STATE_LOADING, f"Opening {mic['name']}")
 
-        # create engine once, reuse across restarts
-        if self.voice_engine is None:
-            self.voice_engine = VoiceEngine(
-                self, self.state, self.speech,
-                device_index=mic["index"],
-            )
-        else:
-            self.voice_engine.capture.device_index = mic["index"]
-        self.voice_engine.set_diagnostic(self.voice_diagnostic)
+        # Publish the engine under the controller lock before starting it so
+        # concurrent shutdown can always signal an in-flight model load.
+        with self._lock:
+            if self._shutdown_event.is_set():
+                return False
+            if self.voice_engine is None:
+                self.voice_engine = VoiceEngine(
+                    self, self.state, self.speech,
+                    device_index=mic["index"],
+                    wake_engine=self._preloaded_wake_engine,
+                )
+            else:
+                self.voice_engine.capture.device_index = mic["index"]
+            engine = self.voice_engine
+        engine.set_diagnostic(self.voice_diagnostic)
 
-        ok = self.voice_engine.start()
+        ok = engine.start()
+        if self._shutdown_event.is_set():
+            engine.stop()
+            return False
         if not ok:
             err = self.state.last_audio_error or "voice startup failed"
             self._emit("voicestate", self.state.snapshot())
@@ -346,6 +402,8 @@ class AssistantController:
         with self._lock:
             self._last_command = cleaned
             self._current_task = cleaned
+        if isinstance(getattr(self.ctx, "state", None), dict):
+            self.ctx.state["input_source"] = "voice" if from_voice else "typed"
         self._set_state(STATE_PROCESSING, cleaned)
         self._emit("timeline", "heard", text)
         self._emit("timeline", "cleaned", cleaned)
@@ -356,13 +414,15 @@ class AssistantController:
             else:
                 # The normal utterance pipeline speaks its own responses.
                 # Registry commands bypass it, so play this one response here.
-                self.speak(spoken)
+                if not cleaned.lower().startswith("/trace "):
+                    self.speak(spoken)
 
         except Exception as exc:
+            audio_log.log_error("Shared command pipeline failed", exc)
             if self.debug:
                 import traceback
                 traceback.print_exc()
-            spoken = f"Something went wrong, sir: {exc}"
+            spoken = f"The command pipeline failed locally: {exc}"
             self._emit("timeline", "failed", str(exc))
             self._set_state(STATE_ERROR, str(exc))
         with self._lock:
@@ -431,13 +491,16 @@ class AssistantController:
     # ---------------------------------------------------------------- shutdown
     def shutdown(self):
         audio_log.log("Controller shutdown requested")
+        self._shutdown_event.set()
         try:
-            if self.voice_engine is not None:
-                self.voice_engine.stop()
+            with self._lock:
+                engine = self.voice_engine
+            if engine is not None:
+                engine.stop()
         except Exception:
             pass
         try:
-            self.speech.stop()
+            self.speech.close()
         except Exception:
             pass
         try:

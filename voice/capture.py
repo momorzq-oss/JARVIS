@@ -35,6 +35,10 @@ class AudioCaptureService:
         self._fps = 0.0
         self._fps_window_start = time.time()
         self._fps_window_frames = 0
+        self._stream_status = ""
+        self._stream_status_count = 0
+        self._stream_status_reported = 0
+        self._last_status_report_at = 0.0
         self.last_error = ""
 
     # ------------------------------------------------------------ subscribe
@@ -77,6 +81,10 @@ class AudioCaptureService:
                     channels=1,
                     dtype="int16",
                     blocksize=CHUNK,
+                    # Wake inference is intentionally off the callback thread,
+                    # but Windows MME still needs enough host buffering while
+                    # ONNX/Whisper workers briefly compete for CPU time.
+                    latency="high",
                     device=self.device_index,
                     callback=self._callback,
                 )
@@ -100,7 +108,12 @@ class AudioCaptureService:
 
     def _callback(self, indata, frames, time_info, status):
         if status:
-            audio_log.log(f"Stream status: {status}")
+            # Never perform file I/O from PortAudio's real-time callback. A
+            # synchronous overflow log made the callback even later and could
+            # sustain an overflow/logging feedback loop. The voice worker
+            # consumes this compact diagnostic outside the audio thread.
+            self._stream_status = str(status)
+            self._stream_status_count += 1
         try:
             audio = np.frombuffer(indata, dtype=np.int16).copy()
         except Exception:
@@ -126,6 +139,18 @@ class AudioCaptureService:
                 cb(audio)
             except Exception as exc:
                 audio_log.log_error(f"Subscriber error: {exc}", exc)
+
+    def consume_stream_status(self, interval_seconds=5.0):
+        """Return a throttled callback diagnostic for a non-realtime worker."""
+        count = self._stream_status_count
+        now = time.monotonic()
+        if (count <= self._stream_status_reported
+                or now - self._last_status_report_at < interval_seconds):
+            return ""
+        delta = count - self._stream_status_reported
+        self._stream_status_reported = count
+        self._last_status_report_at = now
+        return f"{self._stream_status} ({delta} occurrence{'s' if delta != 1 else ''})"
 
     def stop(self):
         """Close the mic stream."""

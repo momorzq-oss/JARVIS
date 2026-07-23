@@ -215,7 +215,8 @@ class BrowserAutomationService:
         """Close the current or a named JARVIS-owned Playwright tab only."""
         page = None
         target_low = str(target or "").strip().lower()
-        if target_low and target_low not in {"current", "this", "last"}:
+        named_target = bool(target_low and target_low not in {"current", "this", "last"})
+        if named_target:
             try:
                 for candidate in reversed(list(self.browser.context.pages)):
                     title = candidate.title().lower()
@@ -225,7 +226,13 @@ class BrowserAutomationService:
                         break
             except Exception:
                 page = None
-        page = page or self._active_page()
+            if page is None:
+                return self._log(self._result(
+                    "failed", "close_tab",
+                    f"No JARVIS tab matching {target} is open.",
+                ))
+        if page is None:
+            page = self._active_page()
         if page is None:
             return self._log(self._result("failed", "close_tab", "No active browser tab."))
         title = ""
@@ -378,7 +385,15 @@ class BrowserAutomationService:
             return self._log(self._result("failed", "youtube_play_relevant", "The active tab is not YouTube.", page))
         self._checkpoint()
         try:
-            candidates = page.locator("ytd-video-renderer a#video-title")
+            selector = "ytd-video-renderer a#video-title[href*='/watch']"
+            # YouTube renders result cards after DOMContentLoaded.  Counting
+            # immediately creates a false "no result" failure on ordinary
+            # connections, so wait for one usable normal-video link first.
+            waiter = getattr(page, "wait_for_selector", None)
+            if callable(waiter):
+                waiter(selector, state="attached", timeout=15000)
+            self._checkpoint()
+            candidates = page.locator(selector)
             count = min(candidates.count(), 12)
             terms = _query_terms(query)
             ranked = []
@@ -450,7 +465,10 @@ class BrowserAutomationService:
     def emergency_stop(self):
         self._stop.set()
         try:
-            for page in list(getattr(self.browser.context, "pages", []) or []):
+            # Never call the context property here: it calls ensure() and can
+            # launch a browser while JARVIS is trying to stop everything.
+            context = getattr(self.browser, "_context", None)
+            for page in list(getattr(context, "pages", []) or []):
                 try:
                     page.evaluate("window.stop()")
                 except Exception:

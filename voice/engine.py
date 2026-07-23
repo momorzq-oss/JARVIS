@@ -11,6 +11,7 @@ before start, so nothing is garbage-collected mid-session. start() marks the
 microphone ON only after the stream actually opens; failures surface the
 exact error and leave typed mode working.
 """
+import queue
 import threading
 import time
 
@@ -30,7 +31,7 @@ SPEECH_COOLDOWN_SECONDS = 0.9
 
 class VoiceEngine:
     def __init__(self, controller, state, speech, wakeword_model=None,
-                 threshold=None, device_index=None):
+                 threshold=None, device_index=None, wake_engine=None):
         self.controller = controller
         self.state = state
         self.speech = speech
@@ -38,9 +39,13 @@ class VoiceEngine:
         self.threshold = threshold if threshold is not None else Config.WAKE_THRESHOLD
         self.capture = AudioCaptureService(device_index=device_index)
         self._thread = None
+        self._wake_thread = None
+        self._wake_frames = queue.Queue(maxsize=2)
         self._stop = threading.Event()
+        self._lifecycle_lock = threading.Lock()
+        self._lifecycle_generation = 0
         self._running = False
-        self._wake = None
+        self._wake = wake_engine
         self._listener = None
         self._frame_queue = []
         self._queue_lock = threading.Lock()
@@ -49,6 +54,7 @@ class VoiceEngine:
         self._wake_suppressed_until = 0.0
         self._diag = False
         self._last_score = 0.0
+        self._wake_voice_hangover = 0
 
     # ------------------------------------------------------------ properties
     @property
@@ -65,27 +71,34 @@ class VoiceEngine:
         if self._running:
             audio_log.log("Voice engine already running")
             return True
+        with self._lifecycle_lock:
+            self._lifecycle_generation += 1
+            generation = self._lifecycle_generation
+            self._stop.clear()
 
-        # 1) validate + open microphone FIRST (mic ON only after stream opens)
+        def cancelled():
+            with self._lifecycle_lock:
+                return (
+                    self._stop.is_set()
+                    or generation != self._lifecycle_generation
+                )
+
+        # 1) load the wake model before opening the real-time stream.  ONNX
+        # initialization can hold the GIL for several seconds; opening the
+        # microphone first made PortAudio callbacks overflow while no audio
+        # could be processed yet.
         self.state.update(microphone_active=False)
-        if not self.capture.start():
-            err = self.capture.last_error or "unknown microphone error"
-            self.state.update(microphone_active=False, microphone_available=False,
-                              last_audio_error=err)
-            audio_log.log_error(f"Voice startup failed (microphone): {err}")
-            return False
-        self.state.update(microphone_active=True, microphone_available=True,
-                          selected_microphone=self.capture.device_name)
-        audio_log.log(f"Microphone ON: {self.capture.device_name}")
-
-        # 2) load wake word model
         try:
-            from voice.wakeword import WakeWordEngine
-            self._wake = WakeWordEngine(model_name=self.wakeword_model,
-                                        threshold=self.threshold)
+            if self._wake is None:
+                from voice.wakeword import WakeWordEngine
+                self._wake = WakeWordEngine(model_name=self.wakeword_model,
+                                            threshold=self.threshold)
             audio_log.log("Wake-word worker started")
             if not self._wake._ensure_loaded():
                 raise RuntimeError(self._wake.load_error or "wake model load failed")
+            if cancelled():
+                audio_log.log("Voice startup cancelled during wake-word load")
+                return False
             self.state.update(wakeword_loaded=True, wakeword_active=True,
                               wakeword_threshold=self.threshold)
             audio_log.log(f"Wake-word model loaded: {self.wakeword_model} "
@@ -94,33 +107,121 @@ class VoiceEngine:
             self.state.update(wakeword_loaded=False, wakeword_active=False,
                               last_audio_error=str(exc))
             audio_log.log_error(f"Wake-word load failed: {exc}", exc)
-            self.capture.stop()
-            self.state.update(microphone_active=False)
             return False
 
-        # 3) listener (whisper) - reuse the controller's listener
+        # 2) listener (whisper) - reuse the controller's listener
         self._listener = self.controller.ctx.listener
         try:
             self.state.update(whisper_loaded=getattr(self._listener, "_model", None) is not None)
         except Exception:
             pass
 
+        if cancelled():
+            audio_log.log("Voice startup cancelled before microphone open")
+            return False
+
+        # 3) open microphone only when the consumer is ready.  The UI marks
+        # the microphone ON only after the stream has actually opened.
+        if not self.capture.start():
+            err = self.capture.last_error or "unknown microphone error"
+            self.state.update(microphone_active=False, microphone_available=False,
+                              last_audio_error=err)
+            audio_log.log_error(f"Voice startup failed (microphone): {err}")
+            return False
+        if cancelled():
+            self.capture.stop()
+            self.state.update(microphone_active=False, wakeword_active=False)
+            audio_log.log("Voice startup cancelled after microphone open")
+            return False
+        self.state.update(microphone_active=True, microphone_available=True,
+                          selected_microphone=self.capture.device_name)
+        audio_log.log(f"Microphone ON: {self.capture.device_name}")
+
         # 4) subscribe wake-word frames + start engine thread
-        self._stop.clear()
         self._wake_event.clear()
         self._wake_session_active.clear()
         self._wake_suppressed_until = 0.0
-        self.capture.subscribe(self._on_wake_frame)
+        # The PortAudio callback must only copy/queue audio.  OpenWakeWord
+        # inference is real work and can otherwise overflow the device callback
+        # or starve Qt's presentation thread while the microphone is active.
+        self.capture.subscribe(self._enqueue_wake_frame)
+        self._wake_thread = threading.Thread(
+            target=self._wake_frame_loop,
+            daemon=True,
+            name="JarvisWakeInference",
+        )
+        self._wake_thread.start()
         self._thread = threading.Thread(target=self._run, daemon=True,
                                         name="JarvisVoiceEngine")
         self._thread.start()          # called exactly once
+        if cancelled():
+            self.stop()
+            return False
         self._running = True
         audio_log.log("Voice engine thread started")
         return True
 
     # ------------------------------------------------------------ frame feed
+    def _enqueue_wake_frame(self, audio):
+        """Keep the newest audio without blocking PortAudio's callback."""
+        try:
+            # AudioCaptureService already owns a copied int16 frame.  Copying
+            # it again in PortAudio's callback needlessly lengthened the
+            # real-time callback and increased Windows input overflows.
+            self._wake_frames.put_nowait(audio)
+            return
+        except queue.Full:
+            pass
+        try:
+            self._wake_frames.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            self._wake_frames.put_nowait(audio)
+        except queue.Full:
+            pass
+
+    def _wake_frame_loop(self):
+        while not self._stop.is_set():
+            try:
+                frame = self._wake_frames.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if frame is None:
+                return
+            stream_status = self.capture.consume_stream_status()
+            if stream_status:
+                audio_log.log(f"Stream status: {stream_status}")
+            self._on_wake_frame(frame)
+
     def _speech_active(self):
         return bool(getattr(self.speech, "speaking", False))
+
+    def _wake_audio_active(self, audio):
+        """Use the existing local VAD to avoid inference on room silence.
+
+        Eight 80 ms hangover frames preserve the end of "Hey Jarvis" and its
+        immediate acoustic context. If VAD is unavailable, wake processing
+        remains enabled so this optimization can never disable the feature.
+        """
+        vad = getattr(self._listener, "_vad", None)
+        if vad is None:
+            return True
+        frame = np.asarray(audio, dtype=np.int16).reshape(-1)
+        try:
+            voiced = any(
+                vad.is_speech(frame[start:start + 320].tobytes(), SAMPLE_RATE)
+                for start in range(0, len(frame) - 319, 320)
+            )
+        except Exception:
+            return True
+        if voiced:
+            self._wake_voice_hangover = 8
+            return True
+        if self._wake_voice_hangover > 0:
+            self._wake_voice_hangover -= 1
+            return True
+        return False
 
     def _reset_wake_model(self):
         model = getattr(self._wake, "_model", None)
@@ -146,6 +247,9 @@ class VoiceEngine:
             self._wake_suppressed_until = now + SPEECH_COOLDOWN_SECONDS
             return
         if now < self._wake_suppressed_until:
+            return
+        if not self._wake_audio_active(audio):
+            self.state.update(wakeword_score=0.0)
             return
         try:
             prediction = self._wake.process(audio)
@@ -364,13 +468,25 @@ class VoiceEngine:
     # ------------------------------------------------------------ stop
     def stop(self):
         audio_log.log("Stop Voice requested")
+        with self._lifecycle_lock:
+            self._lifecycle_generation += 1
         self._stop.set()
         self._wake_event.set()        # unblock waiters
         try:
-            self.capture.unsubscribe(self._on_wake_frame)
+            self.capture.unsubscribe(self._enqueue_wake_frame)
         except Exception:
             pass
+        try:
+            self._wake_frames.put_nowait(None)
+        except queue.Full:
+            try:
+                self._wake_frames.get_nowait()
+                self._wake_frames.put_nowait(None)
+            except (queue.Empty, queue.Full):
+                pass
         self.capture.stop()
+        if self._wake_thread is not None and self._wake_thread.is_alive():
+            self._wake_thread.join(timeout=3)
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=3)
         self._running = False

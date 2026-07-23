@@ -33,8 +33,10 @@ class FakePage:
 class FakeBrowser:
     def __init__(self, page):
         self._context = SimpleNamespace(pages=[page])
+        self.ensure_calls = 0
 
     def ensure(self):
+        self.ensure_calls += 1
         return True
 
     @property
@@ -83,6 +85,17 @@ def test_emergency_stop_stops_active_pages(tmp_path, monkeypatch):
     assert page.evaluated == ["window.stop()"]
 
 
+def test_emergency_stop_does_not_launch_an_offline_browser(tmp_path, monkeypatch):
+    monkeypatch.setattr(Config, "WEB_ACTION_LOG_FILE", tmp_path / "web.jsonl")
+    service = _service()
+    service.browser._context = None
+
+    result = service.emergency_stop()
+
+    assert result.status == "success"
+    assert service.browser.ensure_calls == 0
+
+
 def test_website_adapter_registry_is_explicit():
     registry = WebsiteAdapterRegistry(_service())
     assert {"google", "youtube", "gmail", "google drive", "google docs", "google sheets", "google slides", "stripe", "github"} <= set(registry.names())
@@ -113,6 +126,43 @@ def test_execute_routes_local_youtube_search_and_play(monkeypatch):
     assert observed == {"query": "building a local LLM", "selection": "most_relevant"}
 
 
+def test_youtube_selection_waits_for_a_normal_video_result(tmp_path, monkeypatch):
+    monkeypatch.setattr(Config, "WEB_ACTION_LOG_FILE", tmp_path / "web.jsonl")
+    events = []
+
+    class Candidate:
+        def get_attribute(self, name):
+            return {"title": "Relaxing Piano Music", "href": "/watch?v=123"}.get(name)
+
+        def inner_text(self):
+            return "Relaxing Piano Music"
+
+        def click(self, **_kwargs):
+            events.append("click")
+
+    class Candidates:
+        def count(self):
+            return 1
+
+        def nth(self, _index):
+            return Candidate()
+
+    page = FakePage("https://www.youtube.com/results?search_query=relaxing+piano", "YouTube")
+    page.wait_for_selector = lambda selector, **kwargs: events.append((selector, kwargs))
+    page.locator = lambda selector: Candidates()
+    page.wait_for_load_state = lambda *_args, **_kwargs: events.append("loaded")
+    service = _service(page)
+
+    result = service.youtube_play_relevant("relaxing piano")
+
+    assert result.status == "success"
+    assert events[0] == (
+        "ytd-video-renderer a#video-title[href*='/watch']",
+        {"state": "attached", "timeout": 15000},
+    )
+    assert "click" in events
+
+
 def test_close_named_tab_stays_inside_jarvis_browser_session(tmp_path, monkeypatch):
     monkeypatch.setattr(Config, "WEB_ACTION_LOG_FILE", tmp_path / "web.jsonl")
     page = FakePage("https://www.youtube.com/results?search_query=llm", "YouTube: LLM")
@@ -124,3 +174,17 @@ def test_close_named_tab_stays_inside_jarvis_browser_session(tmp_path, monkeypat
 
     assert result.status == "success"
     assert closed == [True]
+
+
+def test_missing_named_tab_never_closes_unrelated_active_tab(tmp_path, monkeypatch):
+    monkeypatch.setattr(Config, "WEB_ACTION_LOG_FILE", tmp_path / "web.jsonl")
+    page = FakePage("https://www.google.com/search?q=llm", "Google: LLM")
+    closed = []
+    page.close = lambda: closed.append(True)
+    service = _service(page)
+
+    result = service.close_tab("youtube")
+
+    assert result.status == "failed"
+    assert "matching youtube" in result.message.lower()
+    assert closed == []

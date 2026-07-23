@@ -43,6 +43,29 @@ def test_all_requested_navigation_pages_are_real_widgets(window):
         assert window.pages.currentWidget() is widget
 
 
+def test_university_assignment_page_and_creator_credit_use_real_state(window):
+    snapshot = {
+        "university_assignment": {
+            "assignment_type": "Essay",
+            "topic": "Renewable Energy",
+            "word_count": 1200,
+            "citation_style": "APA 7",
+            "academic_level": "Undergraduate",
+            "current_section": "Discussion",
+            "progress": 68,
+            "source_count": 4,
+            "reference_count": 4,
+            "milestone_stage": "",
+            "save_status": "Awaiting save location",
+        }
+    }
+    window._slot_status(snapshot)
+    assert "university" in window.page_map
+    assert window.university_page.values["topic"].text() == "Renewable Energy"
+    assert window.university_page.progress.value() == 68
+    assert window.creator_credit.text() == "MADE BY BURABEEH"
+
+
 def test_dashboard_widgets_consume_explicit_backend_state(window):
     snapshot = {
         "state": "executing",
@@ -147,6 +170,7 @@ def test_complete_semantic_signal_map_exists():
         "application_opened", "application_focused", "application_closed",
         "browser_state_changed", "office_state_changed", "research_state_changed",
         "system_metrics_changed", "audit_event", "emergency_stop_triggered",
+        "startupCompleted",
     )
     assert all(hasattr(bridge, name) for name in names)
 
@@ -159,5 +183,36 @@ def test_live_task_controls_bypass_serial_command_queue(command):
     assert GuiController._is_task_control(command)
 
 
+@pytest.mark.parametrize(
+    "command",
+    ("Pause.", "Resume", "Cancel", "Emergency stop", "Stop everything", "Stop speaking"),
+)
+def test_all_shared_router_control_aliases_bypass_long_tasks(command):
+    assert GuiController._is_task_control(command)
+
+
 def test_ordinary_commands_remain_serialized():
     assert not GuiController._is_task_control("open youtube")
+
+
+def test_prepare_shutdown_stops_every_window_timer(window):
+    from PySide6.QtCore import QTimer
+
+    timers = window.findChildren(QTimer)
+    assert timers
+    for timer in timers:
+        timer.start(100)
+
+    window.prepare_shutdown()
+
+    assert all(not timer.isActive() for timer in timers)
+
+
+def test_gui_shutdown_rejects_new_commands_and_health_work(window):
+    controller = window.gc
+
+    controller.shutdown()
+
+    assert controller.submit_text("open youtube") is False
+    assert controller.run_async(lambda: None) is False
+    assert controller.refresh_status_async() is False

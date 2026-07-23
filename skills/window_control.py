@@ -9,6 +9,27 @@ unrelated process with a similar name.
 from difflib import get_close_matches
 
 
+def _show_owned_window(entry, verb):
+    """Use non-blocking Win32 state changes for a verified registry HWND."""
+    hwnd = int((entry or {}).get("hwnd") or (entry or {}).get("window_handle") or 0)
+    if not hwnd:
+        return False
+    try:
+        import ctypes
+        if not ctypes.windll.user32.IsWindow(hwnd):
+            return False
+        commands = {"minimize": 6, "maximize": 3, "restore": 9, "focus": 9}
+        command = commands.get(verb)
+        if command is None:
+            return False
+        ctypes.windll.user32.ShowWindowAsync(hwnd, command)
+        if verb == "focus":
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
+        return True
+    except Exception:
+        return False
+
+
 def _live_windows():
     try:
         import pygetwindow as gw
@@ -60,6 +81,15 @@ def _act(target, ctx, verb, methods, spoken):
     target = (target or "").strip()
     if not target:
         return f"What should I {verb}, sir?"
+    entry = _registry_entry(target, ctx)
+    if _show_owned_window(entry, verb):
+        if entry is not None and verb in ("minimize", "maximize", "restore"):
+            try:
+                state = "open" if verb == "restore" else f"{verb}d"
+                ctx.registry.set_state(entry["id"], state)
+            except Exception:
+                pass
+        return spoken.format(name=target)
     entry, win = _resolve(target, ctx)
     if win is None:
         return f"I couldn't find a window for {target}, sir."
@@ -84,6 +114,9 @@ def bring_to_front(target, ctx):
     target = (target or "").strip()
     if not target:
         return "Bring what to the front, sir?"
+    entry = _registry_entry(target, ctx)
+    if _show_owned_window(entry, "focus"):
+        return f"Bringing {target} to the front, sir."
     entry, win = _resolve(target, ctx)
     if win is None:
         return f"I couldn't find a window for {target}, sir."

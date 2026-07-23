@@ -83,6 +83,24 @@ def test_window_minimize_uses_registry_match(monkeypatch):
     assert calls == ["min"]
 
 
+def test_verified_registry_hwnd_uses_nonblocking_native_window_action(monkeypatch):
+    reg = _empty_registry()
+    reg.register("app", "Calculator", window_title="Calculator", hwnd=456)
+    calls = []
+    monkeypatch.setattr(
+        window_control, "_show_owned_window",
+        lambda entry, verb: calls.append((entry["hwnd"], verb)) or True,
+    )
+    monkeypatch.setattr(
+        window_control, "_live_windows",
+        lambda: (_ for _ in ()).throw(AssertionError("slow window scan used")),
+    )
+    ctx = type("C", (), {"registry": reg})()
+
+    assert "maximizing" in window_control.maximize_window("Calculator", ctx).lower()
+    assert calls == [(456, "maximize")]
+
+
 def test_window_front_requires_target():
     ctx = type("C", (), {"registry": None})()
     assert window_control.bring_to_front("", ctx) == "Bring what to the front, sir?"

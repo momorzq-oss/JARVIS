@@ -102,6 +102,8 @@ class ActionManager:
         "whatsapp.reply": ("FORM_SUBMIT", "high"),
         "office_word.create_document": ("OFFICE_EDIT", "low"),
         "office_word.create_research_document": ("OFFICE_EDIT", "medium"),
+        "office_word.insert_text": ("OFFICE_EDIT", "low"),
+        "office_word.save_document": ("SAFE_WRITE", "medium"),
         "word.write": ("OFFICE_EDIT", "medium"),
         "word.continue": ("OFFICE_EDIT", "medium"),
         "excel.create": ("OFFICE_EDIT", "medium"),
@@ -131,6 +133,7 @@ class ActionManager:
         "research.draft_report": ("SAFE_WRITE", "medium"),
         "research.finalize_report": ("SAFE_WRITE", "medium"),
         "research.open_report": ("SAFE_READ", "low"),
+        "university.assignment": ("OFFICE_EDIT", "medium"),
         "chat": ("SAFE_READ", "low"),
         "smalltalk": ("SAFE_READ", "low"),
     }
@@ -156,6 +159,8 @@ class ActionManager:
         "office_word": {
             "create_document": "OFFICE_EDIT",
             "create_research_document": "OFFICE_EDIT",
+            "insert_text": "OFFICE_EDIT",
+            "save_document": "SAFE_WRITE",
         },
         "browser": {
             "open_site": "BROWSER_NAVIGATE",
@@ -557,6 +562,8 @@ class ActionManager:
                 "create_research_document": lambda topic, report_length="full", **_: word_skill.create_live_document(
                     topic, self.controller.ctx, report_length=report_length
                 ),
+                "insert_text": lambda text, **_: word_skill.insert_text(text, self.controller.ctx),
+                "save_document": lambda path, **_: word_skill.save_document(path, self.controller.ctx),
             }[action.operation]
             return str(operation(**params))
         if action.skill == "browser":

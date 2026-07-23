@@ -6,6 +6,7 @@ import os
 import time
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -32,6 +33,7 @@ from gui.secondary_pages import (
     ResearchPage,
     SettingsPage,
     TasksPage,
+    UniversityAssignmentPage,
 )
 
 
@@ -41,6 +43,7 @@ NAVIGATION = (
     ("Tasks", "tasks"),
     ("Memory", "memory"),
     ("Research", "research"),
+    ("University", "university"),
     ("Automation", "automation"),
     ("Logs", "logs"),
     ("Settings", "settings"),
@@ -53,11 +56,13 @@ class MainWindow(QWidget):
     exitRequested = Signal()
     minimizeRequested = Signal()
     settingsRequested = Signal()
+    autoVoiceReady = Signal(bool)
 
-    def __init__(self, gui_controller, settings):
+    def __init__(self, gui_controller, settings, startup_progress=None):
         super().__init__()
         self.gc = gui_controller
         self.settings = settings
+        self._startup_progress = startup_progress
         self._voice_on = False
         self._latest_status = {}
         self._latest_task = {}
@@ -65,12 +70,20 @@ class MainWindow(QWidget):
         self._action_nodes = []
         self._build_ui()
         self._wire_signals()
-        self._refresh_status()
+        self._command_shortcut = QShortcut(QKeySequence("Ctrl+L"), self)
+        self._command_shortcut.activated.connect(self._focus_command_input)
         self._refresh_registry()
         self._poll = QTimer(self)
         self._poll.timeout.connect(self._refresh_status)
         self._poll.timeout.connect(self._refresh_registry)
         self._poll.start(1500)
+
+    def _report_startup(self, message):
+        if callable(self._startup_progress):
+            self._startup_progress(str(message))
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
 
     def _build_ui(self):
         self.setObjectName("windowRoot")
@@ -114,19 +127,26 @@ class MainWindow(QWidget):
         top_layout.addWidget(self.btn_min)
         top_layout.addWidget(self.btn_exit)
         root.addWidget(top)
+        self._report_startup("Building subsystem status")
 
         from gui.widgets.hud import SubsystemStatusBar
         self.subsystems = SubsystemStatusBar()
         root.addWidget(self.subsystems)
+        self._report_startup("Building mission-control dashboard")
 
         reduced = bool(self.settings.get("reduce_motion", False))
         self.pages = QStackedWidget()
         self.dashboard = DashboardPage(reduced_motion=reduced)
+        self._report_startup("Building capability controls")
         self.capabilities_page = CapabilitiesPage(self.gc)
+        self._report_startup("Building task and memory controls")
         self.tasks_page = TasksPage()
         self.memory_page = MemoryPage()
+        self._report_startup("Building research and automation controls")
         self.research_page = ResearchPage()
+        self.university_page = UniversityAssignmentPage()
         self.automation_page = AutomationPage()
+        self._report_startup("Building logs and settings")
         self.logs_page = LogsPage()
         self.settings_page = SettingsPage(self.settings)
         self.page_map = {
@@ -135,6 +155,7 @@ class MainWindow(QWidget):
             "tasks": self.tasks_page,
             "memory": self.memory_page,
             "research": self.research_page,
+            "university": self.university_page,
             "automation": self.automation_page,
             "logs": self.logs_page,
             "settings": self.settings_page,
@@ -159,6 +180,10 @@ class MainWindow(QWidget):
             nav.addWidget(button)
         nav.addStretch(1)
         root.addLayout(nav)
+        self.creator_credit = QLabel("MADE BY BURABEEH")
+        self.creator_credit.setObjectName("creatorCredit")
+        self.creator_credit.setAlignment(Qt.AlignCenter)
+        root.addWidget(self.creator_credit)
         self.nav_buttons["dashboard"].setChecked(True)
 
         self._install_compatibility_aliases()
@@ -298,6 +323,7 @@ class MainWindow(QWidget):
         self.dashboard.hermes.set_snapshot(snapshot)
         self.memory_page.set_status(snapshot)
         self.research_page.set_status(snapshot)
+        self.university_page.set_snapshot(snapshot)
         self.fields["sessions"].setText(str(snapshot.get("sessions", 0)))
         if snapshot.get("last_response"):
             self.fields["response"].setText(str(snapshot["last_response"]))
@@ -372,6 +398,7 @@ class MainWindow(QWidget):
     def _slot_voicestate(self, snapshot):
         if not isinstance(snapshot, dict):
             return
+        self._voice_on = bool(snapshot.get("microphone_active"))
         self.dashboard.set_voice_snapshot(snapshot)
         self.subsystems.update_snapshot({**self._latest_status, **snapshot})
         speaker = snapshot.get("speaker_state", "unavailable")
@@ -425,7 +452,12 @@ class MainWindow(QWidget):
 
     def _refresh_status(self):
         try:
-            self._slot_status(self.gc.status_snapshot())
+            refresh_async = getattr(self.gc, "refresh_status_async", None)
+            if callable(refresh_async):
+                refresh_async()
+            else:
+                # Compatibility for lightweight presentation-test doubles.
+                self._slot_status(self.gc.status_snapshot())
         except Exception as exc:
             self.current_status.setText(f"Status unavailable: {exc}")
 
@@ -448,6 +480,11 @@ class MainWindow(QWidget):
             return
         self._log_activity("YOU", text, "typed")
         self.gc.submit_text(text)
+
+    def _focus_command_input(self):
+        self._show_page("dashboard")
+        self.input.setFocus(Qt.ShortcutFocusReason)
+        self.input.selectAll()
 
     def _on_send(self):
         text = self.input.text().strip()
@@ -493,6 +530,12 @@ class MainWindow(QWidget):
             self._voice_on = True
             self._log_activity("VOICE", "Start requested", "control")
 
+    def _on_auto_voice_started(self, started):
+        self._voice_on = bool(started)
+        detail = "Listening for Hey Jarvis" if started else "Automatic start failed"
+        self._log_activity("VOICE", detail, "control" if started else "error")
+        self.autoVoiceReady.emit(bool(started))
+
     def _on_stop_voice(self):
         if self.gc.stop_voice():
             self._voice_on = False
@@ -522,9 +565,6 @@ class MainWindow(QWidget):
         self.settings.set("reduce_motion", bool(enabled))
         self.settings.save()
         self.dashboard.set_reduce_motion(enabled)
-        app = QApplication.instance()
-        if app is not None:
-            app.setStyleSheet(styles.theme_stylesheet(bool(enabled)))
 
     def _run_skill(self, text):
         self.skill_status.setText(f"Running: {text}")
@@ -620,6 +660,12 @@ class MainWindow(QWidget):
     def _on_exit(self):
         self.exitRequested.emit()
 
+    def prepare_shutdown(self):
+        """Stop every presentation timer before backend teardown begins."""
+        self._poll.stop()
+        for timer in self.findChildren(QTimer):
+            timer.stop()
+
     def _selected_name(self):
         return self.dashboard.applications.selected_name()
 
@@ -641,7 +687,5 @@ class MainWindow(QWidget):
         self._quick("close everything you opened")
 
     def closeEvent(self, event):
-        self._poll.stop()
-        for timer in self.findChildren(QTimer):
-            timer.stop()
+        self.prepare_shutdown()
         super().closeEvent(event)

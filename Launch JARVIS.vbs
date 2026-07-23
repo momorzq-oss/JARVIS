@@ -9,10 +9,10 @@ Set shell = CreateObject("WScript.Shell")
 Set fileSystem = CreateObject("Scripting.FileSystemObject")
 projectDir = fileSystem.GetParentFolderName(WScript.ScriptFullName)
 pythonExe = shell.ExpandEnvironmentStrings("%LocalAppData%") & _
-    "\Python\pythoncore-3.14-64\python.exe"
+    "\Programs\Python\Python312\python.exe"
 
 If Not fileSystem.FileExists(pythonExe) Then
-    MsgBox "JARVIS could not find Python 3.14 at:" & vbCrLf & pythonExe, _
+    MsgBox "JARVIS could not find the verified Python 3.12 runtime at:" & vbCrLf & pythonExe, _
         vbCritical, "JARVIS launch error"
     WScript.Quit 1
 End If

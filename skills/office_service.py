@@ -17,7 +17,31 @@ def _com(progid):
         pythoncom.CoInitialize()
     except Exception:
         pass
-    return win32com.client.Dispatch(progid)
+    # Every JARVIS Office task owns an isolated application instance.  Attaching
+    # to a user's existing Word/Excel/PowerPoint session makes cancellation and
+    # shutdown unsafe and can block while an unrelated document is interactive.
+    return win32com.client.DispatchEx(progid)
+
+
+def _word_com():
+    """Acquire Word without starting a second instance behind a template lock.
+
+    Word can leave an otherwise empty application running.  DispatchEx then
+    starts a hidden second process which may block on Normal.dotm.  Reuse the
+    responsive running automation server when available, but track ownership
+    so JARVIS closes only the document it created and never quits a user's
+    Word application.
+    """
+    import pythoncom
+    import win32com.client
+    try:
+        pythoncom.CoInitialize()
+    except Exception:
+        pass
+    try:
+        return win32com.client.GetActiveObject("Word.Application"), False
+    except Exception:
+        return win32com.client.DispatchEx("Word.Application"), True
 
 
 # ===========================================================================
@@ -32,6 +56,7 @@ class WordService:
         self._commands = queue.Queue()
         self._worker = None
         self._ready = threading.Event()
+        self._owns_application = False
 
     def _start_worker(self):
         if self._worker is not None and self._worker.is_alive():
@@ -82,7 +107,7 @@ class WordService:
 
     def open(self, visible=True):
         def operation():
-            self.app = _com("Word.Application")
+            self.app, self._owns_application = _word_com()
             self.app.Visible = visible
             try:
                 self.window_handle = int(self.app.Hwnd)
@@ -247,15 +272,18 @@ class WordService:
             if self.app is None:
                 return True
             try:
-                for document in self.app.Documents:
+                document = self._document
+                if document is not None:
                     try:
                         document.Close(SaveChanges=-1 if save else 0)
                     except Exception:
                         pass
-                self.app.Quit()
+                if self._owns_application:
+                    self.app.Quit()
             finally:
                 self._document = None
                 self.app = None
+                self._owns_application = False
             return True
 
         try:

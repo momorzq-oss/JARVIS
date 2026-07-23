@@ -289,18 +289,18 @@ class ExcelAdapter(DesktopApplicationAdapter):
         return service.close_workbook(save) if service is not None else False
 
     def create_spreadsheet(self, topic="spreadsheet", mode="instant", save_after_completion=True):
-        from skills.office_service import ExcelService
-        service = ExcelService()
         title = (topic or "Spreadsheet").strip().title()
         path = unique_path(created_files_folder("Excel") / descriptive_filename(title, ".xlsx"))
         task = getattr(self.ctx, "live_task", None)
         try:
             if task is not None:
                 task.start(f"excel-{int(time.time())}", f"Create {topic}", application=self.application, mode=mode.upper())
-            service.open(visible=True)
-            workbook = service.new_workbook()
-            sheet = workbook.ActiveSheet
-            sheet.Name = "Monthly Budget" if "budget" in topic.lower() else title[:31]
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill
+
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Monthly Budget" if "budget" in topic.lower() else title[:31]
             if "budget" in topic.lower():
                 rows = [
                     ["Category", "Budget", "Actual", "Difference", "Notes"],
@@ -315,27 +315,30 @@ class ExcelAdapter(DesktopApplicationAdapter):
                     ["Task ID", "Task", "Owner", "Priority", "Status", "Start Date", "Due Date", "Progress %", "Risk", "Next Action", "Notes"],
                     [1, title, "", "Medium", "Not Started", "", "", 0, "", "", ""],
                 ]
-            service.enter_data(rows)
-            try:
-                sheet.Rows(1).Font.Bold = True
-                sheet.Rows(1).AutoFilter()
-                sheet.Columns.AutoFit()
-                sheet.Application.ActiveWindow.FreezePanes = False
-                sheet.Range("A2").Select()
-                sheet.Application.ActiveWindow.FreezePanes = True
-            except Exception:
-                pass
+            for row in rows:
+                sheet.append(row)
+            for cell in sheet[1]:
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.fill = PatternFill("solid", fgColor="1F4E78")
+            sheet.auto_filter.ref = sheet.dimensions
+            sheet.freeze_panes = "A2"
+            for column in sheet.columns:
+                width = max(len(str(cell.value or "")) for cell in column) + 2
+                sheet.column_dimensions[column[0].column_letter].width = min(width, 42)
             if save_after_completion:
-                service.save(path)
+                workbook.save(path)
+            workbook.close()
             if save_after_completion and not path.exists():
                 raise RuntimeError("Excel reported success but the XLSX file was not found")
-            self.ctx.state["excel_service"] = service
-            self.ctx.registry.register("document", path.name, window_title=path.stem,
-                                       closer=lambda svc=service: svc.close(save=True),
-                                       extra={"path": str(path), "application": self.application})
+            from skills.system_control import open_owned_file_in_application
+            opened = open_owned_file_in_application(path, self.application, self.ctx)
+            self.ctx.state["active_office_path"] = str(path)
+            self.ctx.state["current_application"] = self.application
             if task is not None:
                 task.complete()
-            return DesktopActionResult("success", self.application, "create_spreadsheet", f"Created and verified {path.name}. Excel remains open for review.", str(path))
+            message = f"Created and verified {path.name}."
+            message += " Excel remains open for review." if opened else " The file is ready, but Excel did not open in time."
+            return DesktopActionResult("success", self.application, "create_spreadsheet", message, str(path))
         except Exception as exc:
             if task is not None:
                 task.fail(exc)
@@ -405,8 +408,6 @@ class PowerPointAdapter(DesktopApplicationAdapter):
         return service.close_presentation() if service is not None else False
 
     def create_presentation(self, topic="Presentation", slides=10, mode="instant", save_after_completion=True):
-        from skills.office_service import PowerPointService
-        service = PowerPointService()
         title = (topic or "Presentation").strip().title()
         path = unique_path(created_files_folder("PowerPoint") / descriptive_filename(f"{title} Presentation", ".pptx"))
         structure = (
@@ -415,22 +416,33 @@ class PowerPointAdapter(DesktopApplicationAdapter):
         )
         count = max(3, min(int(slides or 10), 20))
         try:
-            service.open(visible=True)
-            presentation = service.new_presentation()
-            service.add_title_slide(title, "Created by JARVIS", presentation)
+            from pptx import Presentation
+
+            presentation = Presentation()
+            title_slide = presentation.slides.add_slide(presentation.slide_layouts[0])
+            title_slide.shapes.title.text = title
+            title_slide.placeholders[1].text = "Created by JARVIS"
             for heading in structure[:count - 1]:
-                service.add_bullet_slide(heading, [f"{heading} for {title}", "Key point", "Recommended next action"], presentation)
+                slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+                slide.shapes.title.text = heading
+                frame = slide.placeholders[1].text_frame
+                frame.text = f"{heading} for {title}"
+                for bullet in ("Key point", "Recommended next action"):
+                    paragraph = frame.add_paragraph()
+                    paragraph.text = bullet
                 if mode in {"visible", "structured"}:
                     time.sleep(max(0, Config.LIVE_TYPING_DELAY_MS) / 1000.0)
             if save_after_completion:
-                service.save(path, presentation)
+                presentation.save(path)
             if save_after_completion and not path.exists():
                 raise RuntimeError("PowerPoint reported success but the PPTX file was not found")
-            self.ctx.state["powerpoint_service"] = service
-            self.ctx.registry.register("document", path.name, window_title=path.stem,
-                                       closer=service.close,
-                                       extra={"path": str(path), "application": self.application})
-            return DesktopActionResult("success", self.application, "create_presentation", f"Created and verified {path.name}. PowerPoint remains open for review.", str(path))
+            from skills.system_control import open_owned_file_in_application
+            opened = open_owned_file_in_application(path, self.application, self.ctx)
+            self.ctx.state["active_office_path"] = str(path)
+            self.ctx.state["current_application"] = self.application
+            message = f"Created and verified {path.name}."
+            message += " PowerPoint remains open for review." if opened else " The file is ready, but PowerPoint did not open in time."
+            return DesktopActionResult("success", self.application, "create_presentation", message, str(path))
         except Exception as exc:
             return DesktopActionResult("failed", self.application, "create_presentation", "Presentation creation failed.", error=str(exc))
 

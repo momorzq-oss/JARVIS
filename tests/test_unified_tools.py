@@ -17,8 +17,37 @@ def test_catalog_uses_namespaces_for_both_engines():
     class Hermes:
         def discover_tools(self):
             return [{"id": "hermes.todo", "engine": "HERMES"}]
-    tools = UnifiedToolCatalog(Registry(), Hermes()).snapshot()
+    catalog = UnifiedToolCatalog(Registry(), Hermes())
+    # Routine snapshots are process-free and contain only cached metadata.
+    assert {tool["id"] for tool in catalog.snapshot()} == {"jarvis.windows.open_application"}
+    tools = catalog.snapshot(refresh=True)
     assert {tool["id"] for tool in tools} == {"jarvis.windows.open_application", "hermes.todo"}
+
+
+def test_catalog_status_uses_cached_hermes_metadata_without_rediscovery():
+    class Registry:
+        def snapshot(self):
+            return []
+
+    class Hermes:
+        last_error = ""
+
+        def __init__(self):
+            self.calls = 0
+
+        def discover_tools(self):
+            self.calls += 1
+            return [{"id": "hermes.todo", "engine": "HERMES"}]
+
+    runtime = Hermes()
+    catalog = UnifiedToolCatalog(Registry(), runtime)
+
+    assert catalog.report()["hermes"] == 0
+    assert runtime.calls == 0
+    assert catalog.report(refresh=True)["hermes"] == 1
+    assert runtime.calls == 1
+    assert catalog.report()["hermes"] == 1
+    assert runtime.calls == 1
 
 
 def test_missing_runtime_is_truthful(tmp_path):

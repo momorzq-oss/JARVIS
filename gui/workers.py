@@ -9,7 +9,6 @@ QThreadPool so the GUI thread never blocks.
 """
 import json
 import queue
-import re
 import threading
 
 from PySide6.QtCore import (
@@ -38,6 +37,8 @@ class _ConfirmationEvent(QEvent):
 
 
 class ControllerBridge(QObject):
+    startupCompleted = Signal()
+    autoVoiceStarted = Signal(bool)
     stateChanged = Signal(str, str)          # state, detail
     statusChanged = Signal(object)           # dict | str
     transcription = Signal(str)
@@ -123,6 +124,7 @@ class GuiController(QObject):
         self._command_thread.start()
         self._shutdown_started = False
         self._confirmation_response = threading.Event()
+        self._confirmation_presented = threading.Event()
         self._confirmation_pending = threading.Event()
         self._confirmation_decision = "deny"
         self._confirmation_dialog = None
@@ -130,6 +132,9 @@ class GuiController(QObject):
         self._known_registry = {}
         self._last_speaker_state = "unavailable"
         self._last_task_status = "idle"
+        self._status_refresh_lock = threading.Lock()
+        self._status_refresh_pending = False
+        self._voice_action_lock = threading.Lock()
         try:
             self.controller.ctx.gui_controller = self
         except Exception:
@@ -139,6 +144,11 @@ class GuiController(QObject):
     @Slot(Action)
     def _handle_confirmation_request(self, action: Action):
         """Displays the GUI confirmation dialog for an action."""
+        # The worker may have abandoned a request if the Qt event loop could
+        # not present it within the bounded display grace period.  Never show
+        # an orphaned approval dialog after its action has already been denied.
+        if not self._confirmation_pending.is_set():
+            return
         self._confirmation_decision = "deny"
         dialog = QDialog()
         self._confirmation_dialog = dialog
@@ -198,6 +208,11 @@ class GuiController(QObject):
         timeout_timer.timeout.connect(timeout)
         timeout_timer.start(self.confirmation_timeout_ms)
 
+        # User response time starts only after Qt has actually built the
+        # dialog.  Counting a busy event-loop delay against that time caused
+        # the worker to time out before the visible Approve button could be
+        # clicked under a full capability test/load.
+        self._confirmation_presented.set()
         dialog.exec()
         timeout_timer.stop()
         self._confirmation_dialog = None
@@ -233,6 +248,11 @@ class GuiController(QObject):
         if dialog is not None:
             approved = self._confirmation_decision == "approve_once"
             QTimer.singleShot(0, dialog.accept if approved else dialog.reject)
+        else:
+            # Voice can answer while the GUI event is still queued.  Mark the
+            # request resolved so the delayed event is discarded as stale.
+            self._confirmation_pending.clear()
+            self._confirmation_presented.set()
         self._confirmation_response.set()
         return True
 
@@ -241,6 +261,7 @@ class GuiController(QObject):
         """Receives confirmation request from agent (worker thread) and routes to GUI thread."""
         self._confirmation_decision = "deny"
         self._confirmation_response.clear() # Clear event for new request
+        self._confirmation_presented.clear()
         self._confirmation_pending.set()
         self.bridge.confirmationRequested.emit(action)
         QCoreApplication.postEvent(
@@ -248,7 +269,19 @@ class GuiController(QObject):
             _ConfirmationEvent(action),
             int(Qt.HighEventPriority.value),
         )
-        # Block worker thread until GUI thread handles confirmation
+        # Give Qt a separate bounded window in which to present the request.
+        # Once presented, the configured confirmation timeout belongs wholly
+        # to the user rather than being consumed by event-loop scheduling.
+        display_timeout_seconds = max(
+            1.0,
+            min(5.0, self.confirmation_timeout_ms / 1000.0),
+        )
+        if not self._confirmation_presented.wait(timeout=display_timeout_seconds):
+            self._confirmation_pending.clear()
+            self._confirmation_decision = "timeout"
+            return "timeout"
+
+        # Block worker thread until GUI/voice handles confirmation.
         timeout_seconds = max(0.001, self.confirmation_timeout_ms / 1000.0)
         if not self._confirmation_response.wait(timeout=timeout_seconds):
             self._confirmation_pending.clear()
@@ -398,7 +431,10 @@ class GuiController(QObject):
 
     # ------------------------------------------------------------------ api
     def run_async(self, fn, *args, **kwargs):
+        if self._shutdown_started:
+            return False
         self.pool.start(_Task(fn, *args, **kwargs))
+        return True
 
     def _command_loop(self):
         while True:
@@ -418,28 +454,42 @@ class GuiController(QObject):
         self.run_async(self.controller.preload_models)
 
     def start_voice(self):
-        # controller already spawns its own wake thread
-        return self.controller.start_voice()
+        # Device discovery and model loading can take seconds. Serialize voice
+        # lifecycle work, but never run it on Qt's presentation thread.
+        self.run_async(self._run_voice_action, self.controller.start_voice)
+        return True
 
     def stop_voice(self):
-        return self.controller.stop_voice()
+        self.run_async(self._run_voice_action, self.controller.stop_voice)
+        return True
+
+    def _run_voice_action(self, operation):
+        with self._voice_action_lock:
+            operation()
 
     def submit_text(self, text):
+        if self._shutdown_started:
+            return False
         if self._is_task_control(text):
             self.pool.start(_Task(self.controller.handle_text, text))
-            return
+            return True
         self._command_queue.put((self.controller.handle_text, (text,), {}, None))
+        return True
 
     @staticmethod
     def _is_task_control(text):
-        cleaned = str(text or "").strip().lower()
-        return re.fullmatch(
-            r"(?:pause typing|pause (?:the )?(?:current )?task|"
-            r"resume typing|resume (?:the )?(?:current )?task|"
-            r"(?:cancel|stop) (?:the )?(?:current )?task|"
-            r"(?:write|type) (?:faster|slower))[.! ]*",
-            cleaned,
-        ) is not None
+        # Use the authoritative deterministic router so typed aliases and
+        # voice-cleaned controls take the same pre-emptive path.  A separate
+        # phrase regex previously missed bare Pause/Resume/Cancel and queued
+        # them behind the task they were meant to control.
+        from brain.router import fast_lane
+        from core.command_text import cleanup_command
+
+        intent = fast_lane(cleanup_command(text), {}) or {}
+        return str(intent.get("skill") or "") in {
+            "task.pause", "task.resume", "task.cancel", "task.speed",
+            "system.emergency_stop", "system.stop_speech",
+        }
 
     def speak(self, text):
         self.run_async(self.controller.speak, text)
@@ -455,6 +505,32 @@ class GuiController(QObject):
 
     def status_snapshot(self):
         return self.controller.status_snapshot()
+
+    def refresh_status_async(self):
+        """Refresh health data without ever blocking Qt's GUI thread.
+
+        A status snapshot can legitimately probe optional external runtimes.
+        Those probes are bounded, but they must not run from a timer callback
+        on the presentation thread.  Coalescing also prevents the 1.5 second
+        UI timer from stacking probes when an external dependency is slow.
+        """
+        with self._status_refresh_lock:
+            if self._shutdown_started or self._status_refresh_pending:
+                return False
+            self._status_refresh_pending = True
+
+        def collect():
+            try:
+                self._forward_status(self.controller.status_snapshot())
+            finally:
+                with self._status_refresh_lock:
+                    self._status_refresh_pending = False
+
+        if not self.run_async(collect):
+            with self._status_refresh_lock:
+                self._status_refresh_pending = False
+            return False
+        return True
 
     def registry_items(self):
         return self.controller.registry_items()
@@ -485,9 +561,23 @@ class GuiController(QObject):
     def shutdown(self):
         if not self._shutdown_started:
             self._shutdown_started = True
+            # Reject/clear work before waiting for the controller.  The GUI's
+            # periodic health timer used to keep adding QRunnables while Exit
+            # was already in progress, leaving the frozen executable alive
+            # after its last window disappeared.
+            self.pool.clear()
+            self._confirmation_decision = "cancel_task"
+            self._confirmation_pending.clear()
+            self._confirmation_presented.set()
+            self._confirmation_response.set()
+            try:
+                self.controller.stop_task()
+            except Exception:
+                pass
             done = threading.Event()
             self._command_queue.put((self.controller.shutdown, (), {}, done))
             done.wait(timeout=10)
             self._command_queue.put(None)
             self._command_thread.join(timeout=5)
-        self.pool.waitForDone(2000)
+        self.pool.clear()
+        return self.pool.waitForDone(5000)

@@ -112,7 +112,7 @@ def create_document(ctx):
         def _closer(svc=service):
             svc.close(save=False)
 
-        ctx.registry.register(
+        entry = ctx.registry.register(
             "document", "New Word Document", window_title="Word",
             pid=service.process_id, hwnd=service.window_handle,
             closer=_closer, extra={
@@ -121,9 +121,59 @@ def create_document(ctx):
             },
         )
         ctx.state["word_service"] = service
+        ctx.state["active_office_entry"] = entry["id"]
         return "A new Word document is open, sir."
     except Exception as exc:
         return f"I couldn't create a Word document: {exc}."
+
+
+def insert_text(text, ctx):
+    """Insert user-supplied text locally into the active JARVIS Word document."""
+    value = str(text or "").strip()
+    if not value:
+        return "What text should I insert, sir?"
+    service = ctx.state.get("word_service")
+    if service is None:
+        return "No JARVIS Word document is active, sir."
+    try:
+        service.insert_text(value)
+        entry_id = ctx.state.get("active_office_entry")
+        if entry_id:
+            ctx.registry.update_entry(entry_id, unsaved_state="unsaved")
+        return f"Inserted {len(value.split())} words into Word, sir."
+    except Exception as exc:
+        return f"Word text insertion failed: {exc}."
+
+
+def save_document(path, ctx):
+    """Save the active JARVIS Word document to an explicit local path."""
+    service = ctx.state.get("word_service")
+    if service is None:
+        return "No JARVIS Word document is active, sir."
+    target = Path(str(path or "")).expanduser()
+    if not target.is_absolute():
+        target = Config.SOURCE_DIR / target
+    if target.suffix.lower() not in {".docx", ".doc"}:
+        target = target.with_suffix(".docx")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        service.save(target)
+        if not target.is_file():
+            return "Word reported a save, but the file was not verified, sir."
+        entry_id = ctx.state.get("active_office_entry")
+        if entry_id:
+            ctx.registry.update_entry(
+                entry_id, name=target.name, display_name=target.name,
+                window_title=target.stem, file_path=str(target),
+                unsaved_state="saved",
+            )
+        ctx.state["last_generated_output"] = str(target)
+        pending = getattr(ctx, "pending", None)
+        if isinstance(pending, dict) and pending.get("kind") == "save_document":
+            ctx.pending = None
+        return f"Saved and verified at {target}, sir."
+    except Exception as exc:
+        return f"The Word document was not saved: {exc}."
 
 
 def create_live_document(topic, ctx, report_length="full"):
@@ -131,9 +181,6 @@ def create_live_document(topic, ctx, report_length="full"):
     topic = (topic or "").strip()
     if not topic:
         return "What should the report be about, sir?"
-    if not ctx.llm.available:
-        return "My writing brain needs the OpenRouter key, sir."
-
     task = getattr(ctx, "live_task", None)
     task_id = uuid.uuid4().hex[:12]
     if task is not None:
@@ -160,7 +207,7 @@ def create_live_document(topic, ctx, report_length="full"):
             summarize_with_llm=not short_report,
         )
         if session is None:
-            detail = getattr(ctx.llm, "last_error", "No verified sources or draft")
+            detail = getattr(ctx.llm, "last_error", "") or "No verified sources or draft"
             if task is not None:
                 task.fail(detail)
             return "The research service could not build a source-grounded report, sir."
@@ -342,6 +389,10 @@ def handle(intent, ctx):
             params.get("topic", ""), ctx,
             report_length=params.get("report_length", "full"),
         )
+    if skill == "office_word.insert_text":
+        return insert_text(params.get("text", ""), ctx)
+    if skill == "office_word.save_document":
+        return save_document(params.get("path", ""), ctx)
     if skill == "word.write":
         return write_document(params.get("topic", ""), params.get("extra", ""), ctx)
     if skill == "word.continue":

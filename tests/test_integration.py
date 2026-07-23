@@ -40,6 +40,16 @@ def test_placeholder_openrouter_key_is_unavailable():
     assert client.available is False
 
 
+def test_llm_client_is_lazy_even_with_valid_key(monkeypatch):
+    from brain.llm import LLM
+    built = []
+    monkeypatch.setattr(LLM, "available", property(lambda self: True))
+    monkeypatch.setattr(LLM, "_build_client", lambda self: built.append(True))
+    client = LLM(api_key="sk-valid-for-test")
+    assert client._client is None
+    assert built == []
+
+
 def test_llm_sanitizes_key_in_error(monkeypatch):
     from brain.llm import LLM
     monkeypatch.setattr(LLM, "available", property(lambda self: True))

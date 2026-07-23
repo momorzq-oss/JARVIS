@@ -42,7 +42,10 @@ class PendingSaveRequest:
         if base is None:
             named = re.sub(r"^(?:the )?", "", low)
             named = re.sub(r"\s+folder$", "", named).strip()
-            if named in {"jarvis .test_tmp", "jarvis test", "jarvis test folder", ".test_tmp"}:
+            if named in {
+                "jarvis .test_tmp", "jarvis test", "jarvis test folder",
+                ".test_tmp", "test_tmp",
+            }:
                 base = Config.TEMP_DIR
 
         if base is None:

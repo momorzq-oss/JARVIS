@@ -1,4 +1,5 @@
 from core.account_connections import AccountConnectionManager
+from core.account_connections import _WHATSAPP_DESKTOP_PROBE
 import json
 
 
@@ -37,6 +38,13 @@ def test_unknown_account_is_rejected(monkeypatch, tmp_path):
     monkeypatch.setattr("core.account_connections.CONNECTION_FILE", tmp_path / "accounts.json")
     result = AccountConnectionManager(FakeContext()).begin_login("unknown")
     assert result["state"] == "ERROR"
+
+
+def test_whatsapp_probe_narrows_uia_to_a_win32_matched_window():
+    assert "EnumWindows" in _WHATSAPP_DESKTOP_PROBE
+    assert "IsWindowVisible" in _WHATSAPP_DESKTOP_PROBE
+    assert 'Desktop(backend="uia").windows()' not in _WHATSAPP_DESKTOP_PROBE
+    assert "pywinauto" not in _WHATSAPP_DESKTOP_PROBE
 
 
 def test_whatsapp_desktop_probe_records_only_verified_connection(monkeypatch, tmp_path):

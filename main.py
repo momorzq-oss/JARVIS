@@ -83,27 +83,38 @@ CANCEL_WORDS = ("never mind", "nevermind", "cancel", "forget it", "stop")
 # ---------------------------------------------------------------------------
 class AssistantContext:
     def __init__(self):
+        log("startup", "Assistant context imports starting")
         from brain.llm import LLM
+        log("startup", "Assistant context imported LLM")
         from brain.router import Router
+        log("startup", "Assistant context imported router")
         from core.registry import SessionRegistry
         from core.live_task import LiveTaskController
         from voice.speaker import Speaker
         from voice.listener import Listener
+        log("startup", "Assistant context imported core and voice services")
         from skills.browser import BrowserEngine, set_shared
+        log("startup", "Assistant context imported browser engine")
         from skills.desktop_automation import DesktopAutomationService
         from skills.web_automation import BrowserAutomationService
         from skills.website_adapters import WebsiteAutomationService
+        log("startup", "Assistant context imported automation services")
 
         self.llm = LLM()
         self.router = Router()
+        log("startup", "Assistant context initialized language services")
         self.registry = SessionRegistry(Config.REGISTRY_FILE)
+        log("startup", "Assistant context initialized registry")
         self.speaker = Speaker()
+        log("startup", "Assistant context initialized lazy Piper service")
         self.listener = Listener()
+        log("startup", "Assistant context initialized registry and audio services")
         self.browser = BrowserEngine(self.registry)
         set_shared(self.browser)
         self.desktop_automation = DesktopAutomationService(self)
         self.web_automation = BrowserAutomationService(self)
         self.website_automation = WebsiteAutomationService(self.web_automation)
+        log("startup", "Assistant context initialized automation services")
         self.website_adapters = self.website_automation.adapters
         self.pending = None          # dict: multi-turn state (confirm/music/research)
         self.state = {}              # misc cross-skill state
@@ -133,7 +144,7 @@ def _modules():
     from skills import window_control
     from skills import (system_control, media, news, emailer, whatsapp,
                         research, word_skill, excel_skill, ppt_skill,
-                        organizer, coder, chat)
+                        organizer, coder, chat, university_assignment)
     return {
         "app.": system_control,
         "window.": window_control,
@@ -149,12 +160,13 @@ def _modules():
         "desktop.": organizer,
         "codex.": coder,
         "research.": research,
+        "university.": university_assignment,
         "chat": chat,
         "smalltalk": chat,
     }
 
 
-SLOW_PREFIXES = ("email.", "news.", "research.", "word.", "excel.", "ppt.",
+SLOW_PREFIXES = ("email.", "news.", "research.", "university.", "word.", "excel.", "ppt.",
                  "office.", "codex.", "whatsapp.", "media.play", "web.", "browser.open")
 
 
@@ -218,14 +230,20 @@ def _dispatch_registered(intent, ctx):
         return None
 
     if skill == "system.emergency_stop":
+        # Signal cancellation and silence output before any optional subsystem
+        # cleanup.  Emergency stop must not wait behind browser or UI work.
+        try:
+            ctx.speaker.stop()
+        except Exception:
+            pass
+        task = getattr(ctx, "live_task", None)
+        if task is not None:
+            task.cancel()
         controller = getattr(ctx, "assistant_controller", None)
         if controller is not None:
             controller.agent.request_stop()
         if getattr(ctx, "web_automation", None) is not None:
             ctx.web_automation.emergency_stop()
-        task = getattr(ctx, "live_task", None)
-        if task is not None:
-            task.cancel()
         return "Emergency stop completed. All automation input was released."
 
     if skill.startswith("task."):
@@ -259,10 +277,8 @@ def _dispatch_registered(intent, ctx):
             try:
                 return module.handle(intent, ctx)
             except Exception as exc:
-                log("error", f"{skill}: {exc}", "red")
-                if getattr(ctx, "debug", False):
-                    traceback.print_exc()
-                return f"Something went wrong with that, sir: {exc}."
+                log("error", f"{skill} failed:\n{traceback.format_exc()}", "red")
+                return f"The {skill.split('.', 1)[0]} action failed locally: {exc}."
 
     # absolute fallback: talk about it
     from skills import chat as chat_mod
@@ -275,9 +291,12 @@ def dispatch(intent, ctx):
     manager = getattr(ctx, "action_manager", None)
     if manager is not None:
         try:
-            return manager.execute_intent(
+            result = manager.execute_intent(
                 intent, lambda: _dispatch_registered(intent, ctx)
             )
+            from core.command_context import record_result
+            record_result(ctx.state, intent, result)
+            return result
         except ValueError as exc:
             log("error", str(exc), "red")
             return "I can't execute that because it is not a registered JARVIS action."
@@ -287,15 +306,22 @@ def dispatch(intent, ctx):
     if full_skill not in ActionManager.INTENT_ALLOWLIST:
         log("error", f"Unregistered intent: {full_skill}", "red")
         return "I can't execute that because it is not a registered JARVIS action."
-    return _dispatch_registered(intent, ctx)
+    result = _dispatch_registered(intent, ctx)
+    from core.command_context import record_result
+    record_result(ctx.state, intent, result)
+    return result
 
 
 def handle_registry_command(text, ctx):
-    command = (text or "").strip().lower()
+    raw_command = (text or "").strip()
+    command = raw_command.lower()
+    if command.startswith("/trace "):
+        from core.command_trace import format_trace
+        return format_trace(raw_command[7:].strip(), ctx)
     if command not in {"/help", "/skills", "/status", "/capabilities", "/selftest"}:
         return None
     if command == "/help":
-        return "Registry commands: /help, /skills, /status, /capabilities, /selftest"
+        return "Registry commands: /help, /skills, /status, /capabilities, /selftest, /trace <command>"
     registry = ctx.state.get("capability_registry")
     if registry is None:
         from core.capability_registry import CapabilityRegistry
@@ -364,6 +390,11 @@ def handle_pending(text, ctx):
         result = research.handle_utterance(text, ctx)
         return True, result
 
+    if kind == "university_assignment":
+        from skills import university_assignment
+        result = university_assignment.handle_followup(text, ctx)
+        return True, result
+
     if kind == "save_document":
         request = pend.get("request")
         if request is None:
@@ -405,7 +436,7 @@ def handle_pending(text, ctx):
 # ---------------------------------------------------------------------------
 def handle_utterance(text, ctx):
     from core.command_text import cleanup_command
-    from core.planner import plan_command
+    from core.command_pipeline import select_route
 
     text = cleanup_command(text)
     if not text:
@@ -419,45 +450,25 @@ def handle_utterance(text, ctx):
         ctx.speaker.speak(registry_response)
         return registry_response
 
-    # barge-in / stop always wins, even mid-pending
-    from brain.router import fast_lane
-    fl = fast_lane(text)
-    if fl and fl["skill"] == "system.stop_speech":
+    route = select_route(text, ctx, source="voice" if ctx.state.get("input_source") == "voice" else "typed")
+    intent = route.get("intent")
+
+    # Barge-in / stop always wins, even mid-pending.
+    if intent and intent["skill"] == "system.stop_speech":
         ctx.speaker.stop()
         log("intent", "system.stop_speech", "yellow")
         return None
 
-    # 1) pending multi-turn state
-    handled, spoken = handle_pending(text, ctx)
-    if handled:
-        if spoken:
-            log("result", f"pending response generated ({len(spoken)} characters)", "green")
-            ctx.speaker.speak(spoken)
-        return spoken
+    if route["route_type"] == "pending":
+        handled, spoken = handle_pending(text, ctx)
+        if handled:
+            if spoken:
+                log("result", f"pending response generated ({len(spoken)} characters)", "green")
+                ctx.speaker.speak(spoken)
+            return spoken
 
-    # Use the compact JARVIS-owned browser context before compound planning.
-    # This keeps follow-ups such as "look for another one" and "close it"
-    # local to the browser session rather than sending them to a model.
-    try:
-        from core.automation_intents import classify_browser_intent
-        browser_intent = classify_browser_intent(text, ctx.state)
-    except Exception:
-        browser_intent = None
-    if browser_intent is not None:
-        log(
-            "intent",
-            f"{browser_intent['skill']} params="
-            f"{sorted((browser_intent.get('params') or {}).keys())}",
-            "yellow",
-        )
-        spoken = dispatch(browser_intent, ctx)
-        if spoken:
-            log("result", f"response generated ({len(spoken)} characters)", "green")
-            ctx.speaker.speak(spoken)
-        return spoken
-
-    plan = plan_command(text)
-    if plan:
+    plan = route.get("plan") or []
+    if route["route_type"] == "plan" and plan:
         results = []
         for index, planned_intent in enumerate(plan, 1):
             log(
@@ -487,11 +498,8 @@ def handle_utterance(text, ctx):
             ctx.speaker.speak(spoken)
         return spoken
 
-    # 2) fast lane (zero model calls)
-    intent = fl or fast_lane(text)
-    # 3) local Qwen router
     if intent is None:
-        intent = ctx.router.classify(text)
+        intent = {"skill": "chat", "params": {"message": text}}
     log(
         "intent",
         f"{intent['skill']} params={sorted((intent.get('params') or {}).keys())}",
@@ -501,7 +509,11 @@ def handle_utterance(text, ctx):
     spoken = dispatch(intent, ctx)
     if spoken:
         log("result", f"response generated ({len(spoken)} characters)", "green")
-        ctx.speaker.speak(spoken)
+        # Keep emergency stop silent after dispatch has cancelled playback.
+        # Its completion remains available to the GUI via the returned text;
+        # starting Piper again here would undo the user's stop request.
+        if intent.get("skill") != "system.emergency_stop":
+            ctx.speaker.speak(spoken)
     return spoken
 
 

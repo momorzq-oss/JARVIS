@@ -15,6 +15,24 @@ APPLICATION_ALIASES = {
     "paint": "Microsoft Paint",
     "edge": "Microsoft Edge",
     "chrome": "Google Chrome",
+    "notepad": "Notepad",
+    "calculator": "Calculator",
+    "file explorer": "File Explorer",
+    "explorer": "File Explorer",
+}
+
+FOLDER_ALIASES = {
+    "desktop": "Desktop",
+    "downloads": "Downloads",
+    "documents": "Documents",
+    "pictures": "Pictures",
+    "videos": "Videos",
+    "music": "Music",
+    "onedrive": "OneDrive",
+    "home": "Home",
+    "this pc": "This PC",
+    "recycle bin": "Recycle Bin",
+    "network": "Network",
 }
 
 SITE_ALIASES = {
@@ -66,6 +84,14 @@ _BROWSER_STOP_WORDS = {
     "me", "my", "of", "on", "or", "please", "the", "this", "to", "with",
 }
 
+_BROWSER_RESULT_SELECTION_SUFFIX = re.compile(
+    r"(?:^|\s+)(?:(?:and|then)\s+)?(?:please\s+)?"
+    r"(?:(?:play|open|start|watch|choose|select)\s+)?(?:the\s+)?"
+    r"(?:(?:first|top|best|good|relevant|matching|most\s+relevant|most\s+useful)\s+)+"
+    r"(?:result|video|one)(?:\s+for\s+me)?[\s.!?,;:]*$",
+    re.I,
+)
+
 
 def _clean_browser_query(value):
     """Remove request scaffolding while leaving the user topic untouched."""
@@ -73,6 +99,7 @@ def _clean_browser_query(value):
     query = re.sub(
         r"^(?:and|then|for|about|on|regarding|of)\s+", "", query, flags=re.I,
     )
+    query = re.sub(r"^(?:a|an)\s+", "", query, flags=re.I)
     query = re.sub(
         r"\b(?:on|in)\s+(?:the\s+)?(?:web|google|youtube)\b", "", query,
         flags=re.I,
@@ -136,6 +163,12 @@ def _extract_browser_query(cleaned, destination=""):
     )
     if marker:
         value = marker.group(1)
+
+    # Result selection describes what to do with search results, not what to
+    # search for.  Remove it once here so every Google/YouTube phrasing shares
+    # the same topic extractor (including speech variants such as "open the
+    # best one" and "play the first good result").
+    value = _BROWSER_RESULT_SELECTION_SUFFIX.sub("", value)
 
     value = re.sub(
         r"\b(?:open|launch|bring up|go to|navigate to|search|find|look|look for|"
@@ -266,6 +299,12 @@ def classify_browser_intent(text, state=None):
     asks_playback = bool(re.search(r"\b(?:play|watch)\b", low))
     asks_search = bool(re.search(r"\b(?:search|find|look for|look up|show me|browse)\b", low))
     selection = "most_relevant" if re.search(r"\b(?:best|most relevant|useful)\b", low) else ""
+    if re.search(
+        r"\b(?:open|start|choose|select)\s+(?:the\s+)?"
+        r"(?:first|top|best|good|relevant|matching|most\s+relevant|most\s+useful)\b",
+        low,
+    ):
+        asks_playback = True
     destination = "youtube" if explicit_youtube else "google" if explicit_google else ""
     if not destination and (media_video or asks_playback or (media_tutorial and selection)):
         destination = "youtube"
@@ -369,10 +408,288 @@ def _document_type(text):
     return next((kind for kind in DOCUMENT_TYPES if kind in low), "document")
 
 
+def _strip_request_scaffolding(text):
+    """Remove politeness without changing the command's entities."""
+    value = str(text or "").strip()
+    value = re.sub(
+        r"^(?:(?:hey|okay)\s+jarvis[, ]*|jarvis[, ]*)?"
+        r"(?:(?:please|kindly)\s+|(?:can|could|would|will)\s+you\s+|"
+        r"i(?:'d| would)?\s+like\s+you\s+to\s+|i\s+(?:need|want)\s+(?:you\s+)?to\s+)*",
+        "", value, flags=re.I,
+    )
+    value = re.sub(r"\s+(?:please|for me)\s*$", "", value, flags=re.I)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _research_topic(text, state=None):
+    """Extract a research subject while excluding output/mode instructions."""
+    value = str(text or "").strip()
+    patterns = (
+        r"\b(?:about|regarding|concerning)\s+(.+)$",
+        r"\blook\s+into\s+(.+)$",
+        r"\binvestigate\s+(.+)$",
+        r"\bresearch\s+(?!report\b|paper\b|document\b)(.+)$",
+        r"\bstudy\s+(?:of\s+)?(.+)$",
+        r"\banalysis\s+of\s+(.+)$",
+    )
+    topic = ""
+    for pattern in patterns:
+        match = re.search(pattern, value, re.I)
+        if match:
+            topic = match.group(1)
+            break
+    if not topic:
+        marker = re.search(r"\b(?:about|on)\s+(.+)$", value, re.I)
+        if marker:
+            topic = marker.group(1)
+    topic = re.split(
+        r"\s+(?:and|then)\s+(?:(?:open|create|make|write|prepare|produce|"
+        r"save|type|put)\b|(?:turn|format)\s+it\b)",
+        topic, maxsplit=1, flags=re.I,
+    )[0]
+    topic = re.split(
+        r"[.!?]+\s*(?=(?:type|write|create|open|save|show|let|do)\b)",
+        topic, maxsplit=1, flags=re.I,
+    )[0]
+    topic = re.sub(
+        r"[.!?]*\s*(?:in|using)\s+(?:microsoft\s+)?word\b.*$", "", topic,
+        flags=re.I,
+    )
+    topic = re.sub(
+        r"[.!?]*\s*(?:live|visibly|so\s+i\s+can\s+watch|while\s+i\s+watch|"
+        r"in\s+front\s+of\s+me)\b.*$", "", topic, flags=re.I,
+    ).strip(" .,!?:;-\t\r\n")
+    if topic.lower() in {"this", "that", "it", "this topic", "that topic"}:
+        context = state.get("command_context", {}) if isinstance(state, dict) else {}
+        topic = str(context.get("current_research_topic") or "")
+    return topic
+
+
+def _classify_office_creation(request):
+    """Classify Office creation once for typed, voice, and fallback routing."""
+    value = str(request or "").strip()
+    low = value.lower().strip(" .!?")
+    creation = any(
+        verb in low for verb in ("create", "write", "prepare", "make", "draft", "build", "put together")
+    )
+    if not creation:
+        return None
+    if any(noun in low for noun in ("spreadsheet", "workbook", "budget", "tracker", "expense sheet")):
+        if re.search(r"\b(?:microsoft\s+)?excel\s+(?:spreadsheet|file)\b", low):
+            return None
+        topic = _extract_topic(value, (r"\b(?:about|for|on)\b",))
+        if not topic:
+            topic = re.sub(
+                r"^(?:create|make|build|prepare) (?:a |an )?", "", value,
+                flags=re.I,
+            )
+            topic = re.sub(
+                r"\s+in (?:microsoft )?excel[.!?]*$", "", topic, flags=re.I,
+            ).strip(" .")
+        return _intent(
+            "office.create_spreadsheet", "CREATE_SPREADSHEET", topic=topic,
+            mode=_mode(value), save_after_completion=True,
+        )
+    if any(noun in low for noun in ("presentation", "slides", "slide deck", "pitch deck")):
+        if re.search(r"\b(?:microsoft\s+)?powerpoint\s+(?:presentation|file)\b", low):
+            return None
+        topic = _extract_topic(value, (r"\b(?:about|for|on)\b",)) or "Presentation"
+        slide_match = re.search(
+            r"\b(\d{1,2}|" + "|".join(NUMBER_WORDS) + r")[- ]slide", low,
+        )
+        slide_count = 10
+        if slide_match:
+            slide_count = (
+                int(slide_match.group(1)) if slide_match.group(1).isdigit()
+                else NUMBER_WORDS[slide_match.group(1)]
+            )
+        return _intent(
+            "office.create_presentation", "CREATE_PRESENTATION", topic=topic,
+            slides=slide_count, mode=_mode(value), save_after_completion=True,
+        )
+    if any(kind in low for kind in DOCUMENT_TYPES):
+        if re.search(r"\b(?:microsoft\s+)?word\b", low):
+            return None
+        return _intent(
+            "office.create_document", "CREATE_DOCUMENT",
+            document_type=_document_type(value),
+            topic=_extract_topic(value, (r"\b(?:about|for|on)\b",)),
+            mode=_mode(value), save_after_completion=True,
+        )
+    return None
+
+
+def classify_local_intent(text, state=None):
+    """Route flexible local commands by semantic category and precedence.
+
+    This is deliberately shared by typed and voice input.  It handles broad
+    aliases and entities; the legacy fast-lane rules remain as compatibility
+    fallbacks for compact exact commands.
+    """
+    cleaned = normalize_automation_text(text)
+    direct = cleaned.lower().strip(" .!?")
+    if re.fullmatch(r"jarvis[, ]+stop", direct):
+        return {"skill": "system.stop_speech", "params": {}}
+    request = _strip_request_scaffolding(cleaned)
+    low = request.lower().strip(" .!?")
+    if not low:
+        return None
+
+    # University work has one semantic extractor and one registered execution
+    # route. It precedes generic report/research rules so citation style, word
+    # count, academic level and contextual follow-ups are never discarded.
+    try:
+        from core.university_assignment import classify_assignment_intent
+        assignment = classify_assignment_intent(request, state)
+        if assignment is not None:
+            return assignment
+    except Exception:
+        pass
+
+    # Global controls must never be swallowed by a pending workflow.
+    if re.fullmatch(r"(?:emergency stop|stop everything|stop all (?:actions|automation))", low):
+        return {"skill": "system.emergency_stop", "params": {}}
+    if re.fullmatch(r"(?:stop speaking|kill voice|stop talking|be quiet|silence)", low):
+        return {"skill": "system.stop_speech", "params": {}}
+    if re.fullmatch(r"pause(?: (?:typing|the task|the current task))?", low):
+        return {"skill": "task.pause", "params": {}}
+    if re.fullmatch(r"(?:resume|continue)(?: (?:typing|the task|the current task))?", low):
+        return {"skill": "task.resume", "params": {}}
+    if re.fullmatch(r"(?:cancel|stop)(?: (?:typing|the task|the current task))?", low):
+        return {"skill": "task.cancel", "params": {}}
+
+    context = state.get("command_context", {}) if isinstance(state, dict) else {}
+
+    # Close commands precede open/create/search commands.
+    if re.fullmatch(r"(?:close|shut|exit|quit) (?:(?:this|the|current)\s+)*tab", low):
+        return {"skill": "browser.close_tab", "params": {"target": "current"}}
+    named_tab = re.fullmatch(r"(?:close|shut|exit|quit) (?:the )?(youtube|google) (?:tab|page)", low)
+    if named_tab:
+        return {"skill": "browser.close_tab", "params": {"target": named_tab.group(1)}}
+    if re.fullmatch(r"(?:close|shut|exit|quit) (?:the )?(?:browser|chrome|google chrome)", low):
+        return {"skill": "browser.close", "params": {"target": "browser"}}
+    if re.fullmatch(
+        r"(?:close|shut|exit|quit) "
+        r"(?:(?:the|that|this|my) )?"
+        r"(?:(?:last|most recently|recently) (?:opened )?)?"
+        r"(?:folder|directory|file explorer)"
+        r"(?: (?:that |which )?(?:(?:i|you|we) )(?:just |recently )?opened)?",
+        low,
+    ):
+        return {"skill": "app.close", "params": {"target": "__recent_folder__"}}
+    if re.fullmatch(r"(?:close|shut|exit|quit) (?:it|this|that|the application|the app)", low):
+        target = str(context.get("current_application") or "")
+        return {"skill": "app.close", "params": {"target": target}}
+    if low.startswith(("close ", "shut ", "exit ", "quit ")):
+        for alias in sorted(APPLICATION_ALIASES, key=len, reverse=True):
+            if re.search(rf"\b{re.escape(alias)}\b", low):
+                return {"skill": "app.close", "params": {"target": alias.title() if alias != "powerpoint" else "PowerPoint"}}
+
+    # Known folders must win over broad browser phrases such as "show me".
+    openish = bool(re.search(
+        r"\b(?:open|show|go to|navigate to|bring up|pull up|fire up|access|display|load)\b|"
+        r"\btake me to\b", low,
+    ))
+    if openish:
+        for alias in sorted(FOLDER_ALIASES, key=len, reverse=True):
+            if re.search(rf"\b{re.escape(alias)}\b(?:\s+(?:folder|directory))?", low):
+                return {"skill": "app.open_folder", "params": {"target": FOLDER_ALIASES[alias]}}
+
+    # Research/document compounds must win over generic "open X" and browser
+    # "watch" language.  The action remains a registered JARVIS action.
+    research_signal = bool(re.search(
+        r"\b(?:research|investigat\w*|study|analysis|literature review|"
+        r"reliable (?:information|sources)|source-grounded|cited|citations?)\b|"
+        r"\blook\s+into\b", low,
+    ))
+    report_signal = bool(re.search(r"\b(?:report|paper|document|brief|findings)\b", low))
+    research_output_signal = bool(re.search(r"\b(?:report|paper|brief|findings)\b", low))
+    creation_signal = bool(re.search(
+        r"\b(?:create|make|write|prepare|produce|draft|build|put together)\b", low,
+    ))
+    word_hint = bool(re.search(r"\b(?:microsoft\s+)?word\b", low))
+    if research_output_signal and creation_signal and word_hint and re.search(r"\b(?:about|on|regarding)\b", low):
+        research_signal = True
+    if research_signal and (creation_signal or report_signal or low.startswith(("research ", "investigate ", "study ", "look into "))):
+        topic = _research_topic(request, state)
+        live = bool(re.search(
+            r"\b(?:live|visibly|progressively|word by word|sentence by sentence)\b|"
+            r"(?:watch|see) (?:you )?type|while i watch|in front of me", low,
+        ))
+        word_requested = word_hint
+        if not word_requested:
+            word_requested = str(context.get("current_application") or "").lower() in {"word", "microsoft word"}
+        report_length = "short" if re.search(r"\b(?:short|brief|concise)\b", low) else "full"
+        params = {
+            "topic": topic,
+            "execution_mode": "LIVE_INTERACTIVE" if live else "FAST_AUTOMATION",
+            "report_length": report_length,
+        }
+        if re.search(r"\b(?:cited|citations?|sources|references|reliable)\b", low):
+            params["citations_required"] = True
+        if word_requested or live:
+            return {"skill": "office_word.create_research_document", "params": params}
+        return {"skill": "research.create_report", "params": params}
+
+    current_application = str(context.get("current_application") or "").lower()
+    word_context = current_application in {"word", "microsoft word"} or bool(
+        re.search(r"\b(?:microsoft\s+)?word\b|\b(?:the|this)\s+document\b", low)
+    )
+    if word_context and re.match(r"^(?:type|insert|add|write)\b", low):
+        supplied = re.sub(
+            r"^(?:type|insert|add|write)\s+(?:(?:this|the)\s+)?"
+            r"(?:(?:text|paragraph|sentence)\s*)?(?:into\s+(?:word|the document)\s*)?[:,-]?\s*",
+            "", request, flags=re.I,
+        ).strip(' "\'')
+        if supplied and supplied.lower() not in {"it", "this", "that"}:
+            return {"skill": "office_word.insert_text", "params": {"text": supplied}}
+
+    save_match = re.match(
+        r"^save(?:\s+(?:it|this|the\s+(?:document|file)))?\s+to\s+(.+)$",
+        request, re.I,
+    )
+    if word_context and save_match:
+        return {
+            "skill": "office_word.save_document",
+            "params": {"path": save_match.group(1).strip(' "\'')},
+        }
+
+    # A blank Word document is local and never needs a model.
+    if (re.search(r"\b(?:create|make|open|start|launch|prepare|bring up)\b", low)
+            and not re.search(r"\b(?:about|on|regarding)\s+\S", low)
+            and re.search(
+        r"\b(?:blank|new)\s+(?:(?:microsoft\s+)?word\s+)?(?:document|file|doc)\b|"
+        r"\b(?:microsoft\s+)?word\s+(?:document|file|doc)\b", low,
+    )):
+        return {"skill": "office_word.create_document", "params": {}}
+
+    office_creation = _classify_office_creation(request)
+    if office_creation is not None:
+        return office_creation
+
+    # Flexible application launch phrasing.  Keep legacy target spellings so
+    # existing registry and close behavior remain unchanged.
+    if openish or re.search(r"\b(?:launch|start|run)\b", low):
+        for alias in sorted(APPLICATION_ALIASES, key=len, reverse=True):
+            if re.search(rf"\b{re.escape(alias)}\b", low):
+                target = alias
+                if alias == "word":
+                    target = "Word"
+                elif alias == "excel":
+                    target = "Excel"
+                if alias == "powerpoint":
+                    target = "PowerPoint"
+                elif alias == "file explorer":
+                    target = "File Explorer"
+                return {"skill": "app.open", "params": {"target": target}}
+    return None
+
+
 def classify_automation_intent(text):
     """Return an allowlist-compatible intent or ``None``."""
     cleaned = normalize_automation_text(text)
-    low = cleaned.lower().strip(" .!?")
+    request = _strip_request_scaffolding(cleaned)
+    low = request.lower().strip(" .!?")
     if not low:
         return None
 
@@ -454,25 +771,9 @@ def classify_automation_intent(text):
     if app_match:
         return _intent("app.open", "OPEN_APPLICATION", target=APPLICATION_ALIASES[app_match.group(1)])
 
-    if any(noun in low for noun in ("spreadsheet", "workbook", "budget", "tracker", "expense sheet")) and any(verb in low for verb in ("create", "make", "build", "prepare")):
-        topic = _extract_topic(cleaned, (r"(?:about|for|on)",))
-        if not topic:
-            topic = re.sub(r"^(?:create|make|build|prepare) (?:a |an )?", "", cleaned, flags=re.I)
-            topic = re.sub(r"\s+in (?:microsoft )?excel[.!?]*$", "", topic, flags=re.I).strip(" .")
-        return _intent("office.create_spreadsheet", "CREATE_SPREADSHEET", topic=topic, mode=_mode(cleaned), save_after_completion=True)
-
-    if any(noun in low for noun in ("presentation", "slides", "slide deck", "pitch deck")) and any(verb in low for verb in ("create", "make", "build", "prepare")):
-        topic = _extract_topic(cleaned, (r"(?:about|for|on)",)) or "Presentation"
-        slide_match = re.search(r"\b(\d{1,2}|" + "|".join(NUMBER_WORDS) + r")[- ]slide", low)
-        slide_count = 10
-        if slide_match:
-            slide_count = int(slide_match.group(1)) if slide_match.group(1).isdigit() else NUMBER_WORDS[slide_match.group(1)]
-        return _intent("office.create_presentation", "CREATE_PRESENTATION", topic=topic, slides=slide_count, mode=_mode(cleaned), save_after_completion=True)
-
-    if any(verb in low for verb in ("create", "write", "prepare", "make", "draft", "put together")) and any(kind in low for kind in DOCUMENT_TYPES):
-        kind = _document_type(cleaned)
-        topic = _extract_topic(cleaned, (r"(?:about|for|on)",))
-        return _intent("office.create_document", "CREATE_DOCUMENT", document_type=kind, topic=topic, mode=_mode(cleaned), save_after_completion=True)
+    office_creation = _classify_office_creation(request)
+    if office_creation is not None:
+        return office_creation
 
     if re.fullmatch(r"(?:save|save this|save the (?:document|workbook|presentation))", low):
         return _intent("office.save", "SAVE_FILE")

@@ -148,6 +148,8 @@ class BrowserEngine:
         self._context = None
         self._lock = threading.Lock()
         self._browser_registered = False
+        self._driver_process = None
+        self._owned_browser_processes = {}
         _set_browser_env()  # ensure writable temp/ browser paths in packaged mode
 
     # ------------------------------------------------------------- lifecycle
@@ -170,6 +172,7 @@ class BrowserEngine:
                 from playwright.sync_api import sync_playwright
                 self._pw = sync_playwright().start()
                 self._context = self._launch()
+                self._capture_owned_browser_processes()
             except Exception as exc:
                 print(f"[browser] launch failed ({exc})", flush=True)
                 self._teardown_pw()
@@ -182,6 +185,7 @@ class BrowserEngine:
                     from playwright.sync_api import sync_playwright
                     self._pw = sync_playwright().start()
                     self._context = self._launch()
+                    self._capture_owned_browser_processes()
                 except Exception as exc2:
                     print(f"[browser] second launch failed: {exc2}", flush=True)
                     self._teardown_pw()
@@ -205,6 +209,7 @@ class BrowserEngine:
                     self.profile_dir,
                     headless=False,
                     no_viewport=True,
+                    timeout=30000,
                     args=[
                         "--start-maximized",
                         "--disable-blink-features=AutomationControlled",
@@ -219,18 +224,98 @@ class BrowserEngine:
         raise last_error or RuntimeError("No browser executable is available")
 
     def _teardown_pw(self):
-        try:
-            if self._context is not None:
-                self._context.close()
-        except Exception:
-            pass
-        try:
-            if self._pw is not None:
-                self._pw.stop()
-        except Exception:
-            pass
+        # A persistent Chrome context can wait indefinitely for extensions or
+        # restored tabs during context.close().  End only the process tree that
+        # carries JARVIS' exact profile first; protocol cleanup is then quick and
+        # cannot touch the user's normal browser profile.
+        self._terminate_owned_browser_processes()
+        self._terminate_driver_process()
         self._context = None
         self._pw = None
+
+    def _capture_owned_browser_processes(self):
+        """Capture browser PIDs from this engine's Playwright driver tree."""
+        self._driver_process = None
+        self._owned_browser_processes = {}
+        try:
+            import psutil
+            implementation = getattr(self._pw, "_impl_obj", None)
+            connection = getattr(implementation, "_connection", None)
+            transport = getattr(connection, "_transport", None)
+            driver = getattr(transport, "_proc", None)
+            driver_pid = int(getattr(driver, "pid", 0) or 0)
+            if not driver_pid:
+                return
+            driver_process = psutil.Process(driver_pid)
+            self._driver_process = (
+                driver_process.pid, driver_process.create_time()
+            )
+            browser_names = {
+                "chrome.exe", "chromium.exe", "msedge.exe", "chrome", "chromium", "msedge",
+            }
+            for process in driver_process.children(recursive=True):
+                try:
+                    if process.name().lower() in browser_names:
+                        self._owned_browser_processes[process.pid] = process.create_time()
+                except Exception:
+                    continue
+        except Exception:
+            self._driver_process = None
+            self._owned_browser_processes = {}
+
+    def _terminate_owned_browser_processes(self, timeout=2.0):
+        """Terminate only the PIDs captured from this Playwright driver."""
+        try:
+            import psutil
+            owned_by_pid = {}
+            for pid, created_at in self._owned_browser_processes.items():
+                try:
+                    process = psutil.Process(pid)
+                    if abs(process.create_time() - created_at) > 0.01:
+                        continue
+                    owned_by_pid[pid] = process
+                    for child in process.children(recursive=True):
+                        owned_by_pid[child.pid] = child
+                except Exception:
+                    continue
+            owned = list(owned_by_pid.values())
+            for process in owned:
+                try:
+                    process.terminate()
+                except Exception:
+                    pass
+            _, alive = psutil.wait_procs(owned, timeout=timeout)
+            for process in alive:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        self._owned_browser_processes = {}
+
+    def _terminate_driver_process(self, timeout=2.0):
+        """Stop only this engine's Node driver without invoking blocking APIs."""
+        captured = self._driver_process
+        self._driver_process = None
+        if not captured:
+            return
+        try:
+            import psutil
+            pid, created_at = captured
+            process = psutil.Process(pid)
+            if abs(process.create_time() - created_at) > 0.01:
+                return
+            descendants = process.children(recursive=True)
+            process.terminate()
+            _, alive = psutil.wait_procs(descendants + [process], timeout=timeout)
+            for item in alive:
+                try:
+                    item.kill()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _close_context_only(self):
         """Registry closer callback."""
@@ -294,18 +379,19 @@ class BrowserEngine:
         return len(self.registry.close_by_name(name))
 
     def close_browser(self):
-        count = 0
+        entries = []
         if self.registry is not None:
-            entries = [entry for entry in self.registry.list_open()
-                       if entry["type"] in ("browser_tab", "browser")]
-            entries.sort(key=lambda entry: entry["type"] != "browser_tab")
-            for e in entries:
-                if e["type"] in ("browser_tab", "browser"):
-                    res = self.registry.close_by_name(e["name"])
-                    count += len(res)
+            entries = [
+                entry for entry in self.registry.list_open()
+                if entry["type"] in ("browser_tab", "browser")
+            ]
         self._teardown_pw()
         self._browser_registered = False
-        return count
+        if self.registry is not None:
+            discard = getattr(self.registry, "discard_types", None)
+            if callable(discard):
+                discard({"browser_tab", "browser"})
+        return len(entries)
 
 
 # ---------------------------------------------------------------------------

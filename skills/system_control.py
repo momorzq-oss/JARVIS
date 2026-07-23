@@ -14,10 +14,12 @@ battery/status report.
 """
 import ctypes
 import os
+import re
 import subprocess
 import time
 from difflib import get_close_matches, SequenceMatcher
 from pathlib import Path
+from types import SimpleNamespace
 
 from config import Config
 from skills.browser import KNOWN_SITES
@@ -146,6 +148,185 @@ def _launch_app(name, ctx):
             return None
 
 
+def _matching_process_ids(executable):
+    """Return live PIDs for an executable name without trusting a launcher."""
+    try:
+        import psutil
+        wanted = Path(str(executable)).name.lower()
+        return {
+            int(process.info["pid"])
+            for process in psutil.process_iter(("pid", "name"))
+            if str(process.info.get("name") or "").lower() == wanted
+        }
+    except Exception:
+        return set()
+
+
+def _window_pid(hwnd):
+    if not hwnd:
+        return None
+    try:
+        process_id = ctypes.c_ulong()
+        ctypes.windll.user32.GetWindowThreadProcessId(
+            int(hwnd), ctypes.byref(process_id)
+        )
+        return int(process_id.value) or None
+    except Exception:
+        return None
+
+
+def _native_process_name(pid):
+    """Return a process image basename without importing process libraries.
+
+    Folder launch verification runs while background capability discovery may
+    still be importing optional packages.  Importing ``psutil`` on this hot
+    path can therefore wait behind Python's import lock for an unrelated slow
+    health probe.  QueryFullProcessImageName is sufficient to prove that a
+    newly created window belongs to Windows Explorer and does not execute or
+    terminate anything.
+    """
+    if os.name != "nt" or not pid:
+        return ""
+    from ctypes import wintypes
+
+    process_query_limited_information = 0x1000
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = (
+        wintypes.DWORD, wintypes.BOOL, wintypes.DWORD,
+    )
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.QueryFullProcessImageNameW.argtypes = (
+        wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    handle = kernel32.OpenProcess(
+        process_query_limited_information, False, int(pid),
+    )
+    if not handle:
+        return ""
+    try:
+        capacity = wintypes.DWORD(32768)
+        buffer = ctypes.create_unicode_buffer(capacity.value)
+        if not kernel32.QueryFullProcessImageNameW(
+            handle, 0, buffer, ctypes.byref(capacity),
+        ):
+            return ""
+        return Path(buffer.value).name.lower()
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _verify_launched_app(target, existing_hwnds, existing_pids, timeout=7.0):
+    """Resolve the real surviving GUI window after Windows launch redirection.
+
+    Store-backed apps such as modern Notepad can spawn through a short-lived
+    launcher PID.  Ownership is therefore established from a new top-level
+    window and its real PID, never from the initial process alone.
+    """
+    try:
+        import pygetwindow as gw
+    except Exception:
+        return None
+
+    executable = Path(str(target.value)).name.lower()
+    target_words = {
+        word for word in re.findall(r"[a-z0-9]+", str(target.name).lower())
+        if len(word) > 2 and word not in {"microsoft", "google", "application"}
+    }
+    deadline = time.time() + max(0.1, float(timeout))
+    while time.time() < deadline:
+        matching_pids = _matching_process_ids(executable)
+        new_process_ids = matching_pids.difference(existing_pids)
+        candidates = []
+        for window in gw.getAllWindows():
+            title = str(getattr(window, "title", "") or "").strip()
+            hwnd = getattr(window, "_hWnd", None)
+            if not title or not hwnd or hwnd in existing_hwnds:
+                continue
+            pid = _window_pid(hwnd)
+            title_low = title.lower()
+            title_matches = bool(target_words) and any(
+                word in title_low for word in target_words
+            )
+            if title_matches or pid in new_process_ids:
+                candidates.append((pid, int(hwnd), title))
+        if candidates:
+            # Prefer a window owned by a newly observed real process.  A title
+            # match remains valid when the app reuses an existing process.
+            candidates.sort(key=lambda item: item[0] not in new_process_ids)
+            return candidates[0]
+        time.sleep(0.1)
+    return None
+
+
+def _find_new_folder_window(path, existing_hwnds, timeout=10.0):
+    """Return the real Explorer PID/HWND created for a folder request."""
+    deadline = time.time() + max(0.1, float(timeout))
+    while time.time() < deadline:
+        new_windows = [
+            (hwnd, pid, title)
+            for hwnd, pid, title in _native_window_snapshot()
+            if hwnd not in existing_hwnds
+        ]
+        matches = [
+            window for window in new_windows
+            if path.name.lower() in window[2].lower()
+        ]
+        if matches:
+            hwnd, pid, title = matches[-1]
+            return pid, hwnd, title
+        # Explorer often creates the verified window under the generic title
+        # "File Explorer" and updates it to the destination later. A new HWND
+        # owned by explorer.exe is still strong ownership evidence for the
+        # request JARVIS just issued.  Verify the owning process natively so
+        # this path cannot block on a lazy psutil import during startup scans.
+        explorer_matches = []
+        for hwnd, pid, title in new_windows:
+            if _native_process_name(pid) == "explorer.exe":
+                explorer_matches.append((pid, hwnd, title))
+        if explorer_matches:
+            return explorer_matches[-1]
+        time.sleep(0.1)
+    return None
+
+
+def _native_window_snapshot():
+    """Enumerate visible titled windows with bounded native Win32 calls.
+
+    ``pygetwindow.getAllWindows`` can block behind shell accessibility state
+    while Explorer is opening a folder.  Folder ownership needs only HWND,
+    PID, visibility, and title, all of which EnumWindows provides directly.
+    """
+    if os.name != "nt":
+        return []
+    from ctypes import wintypes
+
+    windows = []
+    callback_type = ctypes.WINFUNCTYPE(
+        wintypes.BOOL, wintypes.HWND, wintypes.LPARAM,
+    )
+
+    def visit(hwnd, _parameter):
+        if not ctypes.windll.user32.IsWindowVisible(hwnd):
+            return True
+        length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        ctypes.windll.user32.GetWindowTextW(hwnd, buffer, length + 1)
+        title = buffer.value.strip()
+        if title:
+            windows.append((int(hwnd), _window_pid(hwnd), title))
+        return True
+
+    callback = callback_type(visit)
+    ctypes.windll.user32.EnumWindows(callback, 0)
+    return windows
+
+
 def _launch_resolved(target, ctx):
     if target.kind in ("folder", "file"):
         path = Path(target.value)
@@ -153,43 +334,23 @@ def _launch_resolved(target, ctx):
             return None
         try:
             if target.kind == "folder":
-                existing_hwnds = set()
-                try:
-                    import pygetwindow as gw
-                    existing_hwnds = {
-                        getattr(window, "_hWnd", None) for window in gw.getAllWindows()
-                        if getattr(window, "_hWnd", None)
-                    }
-                except Exception:
-                    pass
-                proc = subprocess.Popen(["explorer.exe", str(path)], shell=False)
-                time.sleep(0.2)
-                if proc.poll() not in (None, 0):
+                existing_hwnds = {
+                    hwnd for hwnd, _pid, _title in _native_window_snapshot()
+                }
+                # Explorer hands this request to the user's existing shell and
+                # the short-lived launcher may exit immediately. Popen itself
+                # is asynchronous, so a busy shell cannot hold the serialized
+                # command worker inside ShellExecute for a full DDE timeout.
+                # Ownership is established only from the new real HWND below.
+                subprocess.Popen(
+                    ["explorer.exe", str(path)], shell=False,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    **_background_process_kwargs(),
+                )
+                verified = _find_new_folder_window(path, existing_hwnds)
+                if verified is None:
                     return None
-                pid = None
-                hwnd = None
-                window_title = path.name or str(path)
-                try:
-                    import pygetwindow as gw
-                    deadline = time.time() + 3.0
-                    matches = []
-                    while time.time() < deadline and not matches:
-                        matches = [window for window in gw.getAllWindows()
-                                   if window.title and path.name.lower() in window.title.lower()
-                                   and getattr(window, "_hWnd", None) not in existing_hwnds]
-                        if not matches:
-                            time.sleep(0.1)
-                    if matches:
-                        hwnd = getattr(matches[-1], "_hWnd", None)
-                        window_title = matches[-1].title
-                        if hwnd:
-                            process_id = ctypes.c_ulong()
-                            ctypes.windll.user32.GetWindowThreadProcessId(
-                                int(hwnd), ctypes.byref(process_id)
-                            )
-                            pid = int(process_id.value) or None
-                except Exception:
-                    pass
+                pid, hwnd, window_title = verified
             else:
                 os.startfile(str(path))
                 pid = None
@@ -221,44 +382,25 @@ def _launch_resolved(target, ctx):
                 }
             except Exception:
                 pass
+            existing_pids = _matching_process_ids(target.value)
             proc = subprocess.Popen([target.value], shell=False,
                                     stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL,
                                     **_background_process_kwargs())
-            time.sleep(0.25)
-            if proc.poll() not in (None, 0):
+            verified = _verify_launched_app(
+                target, existing_hwnds, existing_pids,
+            )
+            if verified is None:
                 return None
-            pid = proc.pid if proc.poll() is None else None
-            hwnd = None
-            window_title = target.name
-            try:
-                import pygetwindow as gw
-                deadline = time.time() + 3.0
-                matches = []
-                target_low = target.name.lower()
-                while time.time() < deadline and not matches:
-                    matches = [
-                        window for window in gw.getAllWindows()
-                        if window.title and target_low in window.title.lower()
-                        and getattr(window, "_hWnd", None) not in existing_hwnds
-                    ]
-                    if not matches:
-                        time.sleep(0.1)
-                if matches:
-                    hwnd = getattr(matches[-1], "_hWnd", None)
-                    window_title = matches[-1].title
-                    if hwnd:
-                        process_id = ctypes.c_ulong()
-                        ctypes.windll.user32.GetWindowThreadProcessId(
-                            int(hwnd), ctypes.byref(process_id)
-                        )
-                        pid = int(process_id.value) or pid
-            except Exception:
-                pass
+            pid, hwnd, window_title = verified
             ctx.registry.register("app", target.name, pid=pid, hwnd=hwnd,
                                   window_title=window_title,
                                   exe_path=target.value,
-                                  extra={"process_name": Path(target.value).name})
+                                  extra={
+                                      "process_name": Path(target.value).name,
+                                      "launcher_pid": proc.pid,
+                                      "verified_window": True,
+                                  })
             return f"Opening {target.name}."
         except OSError:
             return None
@@ -279,6 +421,124 @@ def _launch_resolved(target, ctx):
         if page is not None:
             return f"Opening {target.name} in the browser."
     return None
+
+
+def open_owned_file_in_application(path, application, ctx, timeout=20.0):
+    """Open a generated file in a verified, JARVIS-owned application window."""
+    from core.application_registry import ApplicationRegistry
+
+    target_path = Path(path).resolve()
+    if not target_path.is_file():
+        return False
+    application_key = str(application).strip().lower()
+    specifications = {
+        "excel": ("microsoft excel", "excel.exe"),
+        "microsoft excel": ("microsoft excel", "excel.exe"),
+        "powerpoint": ("microsoft powerpoint", "powerpnt.exe"),
+        "microsoft powerpoint": ("microsoft powerpoint", "powerpnt.exe"),
+        "word": ("microsoft word", "winword.exe"),
+        "microsoft word": ("microsoft word", "winword.exe"),
+    }
+    canonical_name, executable_name = specifications.get(
+        application_key, (application_key, ""),
+    )
+    executable = ApplicationRegistry._find_executable((executable_name,)) if executable_name else None
+    if not executable:
+        return False
+    existing_hwnds = set()
+    try:
+        import pygetwindow as gw
+        existing_hwnds = {
+            getattr(window, "_hWnd", None) for window in gw.getAllWindows()
+            if getattr(window, "_hWnd", None)
+        }
+    except Exception:
+        pass
+    existing_pids = _matching_process_ids(executable)
+    process = None
+    try:
+        if application_key in {"powerpoint", "microsoft powerpoint"}:
+            # PowerPoint's supported file association opens a new document
+            # window reliably; direct cold-start command lines can remain on
+            # the transient "Opening" frame indefinitely.
+            os.startfile(str(target_path))
+        else:
+            arguments = [str(executable)]
+            if application_key in {"excel", "microsoft excel"}:
+                arguments.append("/x")
+            arguments.append(str(target_path))
+            process = subprocess.Popen(
+                arguments, shell=False, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, **_background_process_kwargs(),
+            )
+    except OSError:
+        return False
+    target = SimpleNamespace(value=str(executable), name=canonical_name)
+    verified = _verify_launched_app(
+        target, existing_hwnds, existing_pids, timeout=timeout,
+    )
+    if verified is None:
+        return False
+    pid, hwnd, window_title = verified
+
+    def ready_window(process_id):
+        from ctypes import wintypes
+
+        windows = []
+        callback_type = ctypes.WINFUNCTYPE(
+            wintypes.BOOL, wintypes.HWND, wintypes.LPARAM,
+        )
+
+        def visit(candidate, _parameter):
+            owner = wintypes.DWORD()
+            ctypes.windll.user32.GetWindowThreadProcessId(
+                candidate, ctypes.byref(owner),
+            )
+            if owner.value != int(process_id or 0):
+                return True
+            if not ctypes.windll.user32.IsWindowVisible(candidate):
+                return True
+            length = ctypes.windll.user32.GetWindowTextLengthW(candidate)
+            buffer = ctypes.create_unicode_buffer(length + 1)
+            ctypes.windll.user32.GetWindowTextW(candidate, buffer, length + 1)
+            title = buffer.value.strip()
+            if title and "opening" not in title.lower():
+                windows.append((int(candidate), title))
+            return True
+
+        ctypes.windll.user32.EnumWindows(callback_type(visit), 0)
+        target_stem = target_path.stem.lower()
+        return next(
+            (item for item in windows if target_stem in item[1].lower()),
+            windows[0] if windows else None,
+        )
+
+    deadline = time.time() + max(1.0, float(timeout))
+    ready = None
+    while time.time() < deadline:
+        ready = ready_window(pid)
+        if ready is not None:
+            hwnd, window_title = ready
+            break
+        time.sleep(0.1)
+    if ready is None:
+        return False
+
+    def close_window(window_handle=hwnd):
+        if window_handle:
+            ctypes.windll.user32.PostMessageW(int(window_handle), 0x0010, 0, 0)
+
+    ctx.registry.register(
+        "document", target_path.name, pid=pid, hwnd=hwnd,
+        window_title=window_title, path=str(target_path), closer=close_window,
+        extra={
+            "path": str(target_path), "application": canonical_name,
+            "process_name": Path(executable).name,
+            "launcher_pid": process.pid if process is not None else None,
+            "verified_window": True, "close_policy": "owned_only",
+        },
+    )
+    return True
 
 
 def open_thing(name, ctx, preferred_kind=None):

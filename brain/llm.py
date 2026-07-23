@@ -19,8 +19,9 @@ class LLM:
         self.last_error = ""
         self._lock = threading.Lock()
         self._client = None
-        if self.available:
-            self._build_client()
+        # Client construction imports the provider stack and may inspect proxy
+        # or certificate configuration.  Keep startup and every local command
+        # independent of that work; chat()/stream() build it on first use.
 
     # ------------------------------------------------------------ plumbing
     @property

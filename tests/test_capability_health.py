@@ -4,6 +4,24 @@ from core.capability_health import (
 )
 
 
+def test_system_metrics_do_not_import_process_telemetry(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name == "psutil":
+            raise AssertionError("routine metrics must not import psutil")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    metrics = CapabilityHealth().system_metrics()
+
+    assert metrics["status"] == "WORKING"
+    assert "ram_percent" in metrics
+    assert "disk_percent" in metrics
+
+
 def test_health_reports_working_for_builtin_skill():
     result = CapabilityHealth().check("system_control")
     assert result.status == WORKING

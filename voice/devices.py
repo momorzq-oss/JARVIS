@@ -7,21 +7,51 @@ Selection order for the microphone:
   2. Windows default input device
   3. first input device with at least one input channel
 """
+import sys
+import threading
+
 from voice import audio_log
 
 
+_backend_lock = threading.RLock()
+_backend_module = None
+
+
+def initialize_audio_backend():
+    """Initialize PortAudio once on the process-owning main thread."""
+    global _backend_module
+    with _backend_lock:
+        if _backend_module is not None:
+            return _backend_module
+        loaded = sys.modules.get("sounddevice")
+        if loaded is not None:
+            _backend_module = loaded
+            return loaded
+        if threading.current_thread() is not threading.main_thread():
+            raise RuntimeError(
+                "audio backend is not initialized; initialize it on the main thread"
+            )
+        import sounddevice as sd
+        _backend_module = sd
+        return sd
+
+
 def _sd():
-    import sounddevice as sd
-    return sd
+    return initialize_audio_backend()
 
 
 def list_devices():
     """Return a list of dicts describing every device."""
     sd = _sd()
     out = []
-    for index, dev in enumerate(sd.query_devices()):
+    devices = sd.query_devices()
+    try:
+        host_apis = sd.query_hostapis()
+    except Exception:
+        host_apis = []
+    for index, dev in enumerate(devices):
         try:
-            host = sd.query_hostapis(dev["hostapi"])["name"]
+            host = host_apis[int(dev["hostapi"])]["name"]
         except Exception:
             host = "?"
         out.append({
@@ -33,6 +63,29 @@ def list_devices():
             "default_samplerate": int(dev["default_samplerate"]),
         })
     return out
+
+
+def _device_at(index):
+    """Query one PortAudio device without enumerating every Windows backend."""
+    if index is None:
+        return None
+    try:
+        sd = _sd()
+        dev = sd.query_devices(int(index))
+        try:
+            host = sd.query_hostapis(int(dev["hostapi"]))["name"]
+        except Exception:
+            host = "?"
+        return {
+            "index": int(index),
+            "name": dev["name"],
+            "host_api": host,
+            "input_channels": dev["max_input_channels"],
+            "output_channels": dev["max_output_channels"],
+            "default_samplerate": int(dev["default_samplerate"]),
+        }
+    except Exception:
+        return None
 
 
 def input_devices():
@@ -68,6 +121,18 @@ def resolve_microphone(saved=None):
     """
     Return (device_dict, note). Clears an invalid saved selection.
     """
+    # The normal configuration is "default".  PortAudio's full Windows
+    # inventory can block for tens of seconds while probing MME, DirectSound,
+    # WASAPI and WDM-KS.  Query the one declared default device first and only
+    # enumerate everything when that direct choice is unavailable or unsafe.
+    if saved in (None, "", "default"):
+        direct_default = _device_at(default_input_index())
+        if direct_default is not None and _is_real_mic(direct_default):
+            audio_log.log(
+                f"Selected default input microphone: {direct_default['name']}"
+            )
+            return direct_default, "default"
+
     audio_log.log("Enumerating audio devices")
     devices = list_devices()
     for d in devices:
@@ -106,6 +171,13 @@ def resolve_microphone(saved=None):
 
 def resolve_speaker(saved=None):
     """Return (device_dict, note)."""
+    if saved in (None, "", "default"):
+        direct_default = _device_at(default_output_index())
+        if direct_default is not None and direct_default["output_channels"] > 0:
+            audio_log.log(
+                f"Selected default output speaker: {direct_default['name']}"
+            )
+            return direct_default, "default"
     devices = list_devices()
     if saved not in (None, "", "default"):
         for d in devices:

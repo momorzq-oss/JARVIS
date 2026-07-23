@@ -24,6 +24,7 @@ from core.unified_tool_catalog import UnifiedToolCatalog
 from core.unified_tool_router import UnifiedToolRouter
 from brain.hermes_task_manager import HermesTaskManager
 from brain.hermes_health import hermes_health
+from brain.hermes_adapter import HermesAdapter
 from core.account_connections import AccountConnectionManager
 
 STATE_IDLE = "idle"
@@ -83,6 +84,7 @@ class AssistantController:
         self.capability_registry = CapabilityRegistry(self)
         self.unified_tool_catalog = UnifiedToolCatalog(self.capability_registry)
         self.unified_tool_router = UnifiedToolRouter()
+        self.hermes_adapter = HermesAdapter()
         self.hermes_tasks = HermesTaskManager()
         self.account_connections = AccountConnectionManager(self.ctx)
         live_task = getattr(self.ctx, "live_task", None)
@@ -472,6 +474,10 @@ class AssistantController:
         except Exception:
             pass
         try:
+            self.hermes_adapter.cancel()
+        except Exception:
+            pass
+        try:
             self.hermes_tasks.cancel_all()
         except Exception:
             pass
@@ -492,6 +498,10 @@ class AssistantController:
     def shutdown(self):
         audio_log.log("Controller shutdown requested")
         self._shutdown_event.set()
+        try:
+            self.hermes_adapter.cancel()
+        except Exception:
+            pass
         try:
             with self._lock:
                 engine = self.voice_engine

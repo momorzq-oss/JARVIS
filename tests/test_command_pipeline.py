@@ -435,3 +435,26 @@ def test_emergency_stop_completion_is_visual_but_does_not_restart_speech(monkeyp
 
     assert result.startswith("Emergency stop completed")
     assert spoken == []
+
+
+def test_emergency_dispatch_cancels_controller_owned_hermes_adapter():
+    import main as main_mod
+
+    stopped = []
+    ctx = SimpleNamespace(
+        speaker=SimpleNamespace(stop=lambda: stopped.append("speech")),
+        live_task=None,
+        assistant_controller=SimpleNamespace(
+            stop_task=lambda: stopped.append("controller"),
+        ),
+        web_automation=SimpleNamespace(
+            emergency_stop=lambda: stopped.append("browser"),
+        ),
+    )
+
+    result = main_mod._dispatch_registered(
+        {"skill": "system.emergency_stop", "params": {}}, ctx,
+    )
+
+    assert stopped == ["speech", "controller", "browser"]
+    assert result.startswith("Emergency stop completed")

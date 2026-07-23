@@ -241,7 +241,7 @@ def _dispatch_registered(intent, ctx):
             task.cancel()
         controller = getattr(ctx, "assistant_controller", None)
         if controller is not None:
-            controller.agent.request_stop()
+            controller.stop_task()
         if getattr(ctx, "web_automation", None) is not None:
             ctx.web_automation.emergency_stop()
         return "Emergency stop completed. All automation input was released."

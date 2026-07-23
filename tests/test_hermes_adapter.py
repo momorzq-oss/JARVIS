@@ -1,4 +1,7 @@
 import json
+import subprocess
+import threading
+import time
 
 import pytest
 
@@ -47,19 +50,122 @@ def test_plan_decodes_official_quiet_output_as_utf8(monkeypatch):
     }
     observed = {}
 
-    class Completed:
+    class Process:
+        pid = -1
         returncode = 0
-        stdout = json.dumps(payload, ensure_ascii=False)
-        stderr = ""
 
-    def run(*args, **kwargs):
+        def poll(self):
+            return self.returncode
+
+        def communicate(self, timeout=None):
+            return json.dumps(payload, ensure_ascii=False), ""
+
+    def popen(*args, **kwargs):
         observed.update(kwargs)
-        return Completed()
+        return Process()
 
     adapter = HermesAdapter(enabled=True, mode="cli")
     monkeypatch.setattr(adapter, "_pilot_command", lambda _prompt: ["hermes"])
-    monkeypatch.setattr("brain.hermes_adapter.subprocess.run", run)
+    monkeypatch.setattr("brain.hermes_adapter.subprocess.Popen", popen)
 
     assert adapter.plan(request)["summary"] == "Safe plan."
     assert observed["encoding"] == "utf-8"
     assert observed["errors"] == "replace"
+
+
+def test_active_plan_process_is_cancelled_and_cleared(monkeypatch):
+    request = HermesPlanRequest("goal", "request", [], {}, [], {}, [])
+    started = threading.Event()
+
+    class BlockingProcess:
+        pid = -1
+
+        def __init__(self):
+            self.returncode = None
+            self.terminated = False
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self, timeout=None):
+            started.set()
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("hermes", timeout)
+            return "", ""
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    process = BlockingProcess()
+    adapter = HermesAdapter(enabled=True, mode="cli", timeout=5)
+    monkeypatch.setattr(adapter, "_pilot_command", lambda _prompt: ["hermes"])
+    monkeypatch.setattr("brain.hermes_adapter.subprocess.Popen", lambda *a, **k: process)
+    errors = []
+
+    worker = threading.Thread(
+        target=lambda: _capture_error(errors, lambda: adapter.plan(request)), daemon=True,
+    )
+    worker.start()
+    assert started.wait(1)
+    assert adapter.running
+    assert adapter.cancel()
+    worker.join(2)
+
+    assert not worker.is_alive()
+    assert process.terminated
+    assert not adapter.running
+    assert len(errors) == 1
+    assert isinstance(errors[0], HermesAdapterError)
+    assert "cancelled" in str(errors[0]).lower()
+
+
+def test_plan_timeout_terminates_owned_process(monkeypatch):
+    request = HermesPlanRequest("goal", "request", [], {}, [], {}, [])
+
+    class BlockingProcess:
+        pid = -1
+        returncode = None
+        terminated = False
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self, timeout=None):
+            raise subprocess.TimeoutExpired("hermes", timeout)
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    process = BlockingProcess()
+    clock = iter((0.0, 2.0))
+    adapter = HermesAdapter(enabled=True, mode="cli", timeout=1)
+    monkeypatch.setattr(adapter, "_pilot_command", lambda _prompt: ["hermes"])
+    monkeypatch.setattr("brain.hermes_adapter.subprocess.Popen", lambda *a, **k: process)
+    monkeypatch.setattr("brain.hermes_adapter.time.monotonic", lambda: next(clock))
+
+    with pytest.raises(HermesAdapterError, match="timed out"):
+        adapter.plan(request)
+
+    assert process.terminated
+    assert not adapter.running
+
+
+def _capture_error(errors, callback):
+    try:
+        callback()
+    except Exception as exc:
+        errors.append(exc)

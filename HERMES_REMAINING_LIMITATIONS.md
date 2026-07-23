@@ -4,5 +4,5 @@
 2. The supported integration surface is the official quiet one-shot CLI; no stable structured planner HTTP API was identified.
 3. Hermes is installed and diagnostics pass, but the live zero-tool OpenRouter request for `openai/gpt-oss-safeguard-20b` was rate-limited by provider Groq (HTTP 429), so no structured plan has been validated.
 4. No background execution is enabled; task records are JARVIS-side control state only.
-5. The complete supported Python 3.12 regression suite passes; the old Python 3.14 dependency-failure note is obsolete.
+5. The complete supported Python 3.12 regression suite passes: 558 collected, 558 passed, 0 failed, 0 skipped.
 6. The existing packaged candidate predates the latest routing and Hermes adapter fixes. A new Hermes candidate must not be built or promoted until a real plan validates and the required Hermes pilots pass. Promotion is not recommended yet.

@@ -9,3 +9,8 @@ machine-readable one-shot mode, plus `--safe-mode`, one maximum turn, the
 `tool` source tag, and the empty `context_engine` toolset.
 Stdout is therefore treated only as a complete JSON document; JARVIS never
 extracts executable instructions from decorated CLI prose.
+
+The plan subprocess is controller-owned and polled with a bounded timeout.
+Stop, shutdown, and emergency-stop paths terminate only that exact process and
+its descendants, then clear adapter state. Diagnostics and planning never use
+`shell=True` or parse prose into executable actions.

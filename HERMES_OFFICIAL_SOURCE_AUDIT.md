@@ -14,13 +14,15 @@ The documented commands are `hermes`, `hermes model`, `hermes tools`, `hermes co
 
 ## Security finding and installation decision
 
-**Installation has not passed JARVIS's pilot safety gate.** The official installer and documentation explicitly provision Git Bash and describe Hermes executing shell commands, autonomous skills, scheduling, messaging gateways, and external tools. Those defaults conflict with the requested boundary that Hermes must not have unrestricted shell, file, browser, Office, mouse, keyboard, or Windows control.
+The official installer and documentation explicitly describe shell commands, autonomous skills, schedules, messaging gateways, and external tools. JARVIS therefore does not expose the full Hermes tool surface during the pilot.
 
-No installer was executed. No Hermes binary, dependencies, gateway, tools, provider keys, memory, schedules, or messaging integrations were installed. JARVIS therefore uses a disabled-by-default adapter and only accepts its own structured plan format. A future installation requires a reviewed JARVIS-only toolset/isolated terminal policy plus a real structured-planning interface; neither is claimed by this audit.
+After the user approved a staged external install, the reviewed repository and its independent Python environment were installed as the current user under `%LOCALAPPDATA%\hermes`, at the audited commit above. The optional Node/browser, messaging-SDK, setup, configuration, and gateway stages were not run. The JARVIS project, Python 3.12 environment, Piper, Whisper, OpenWakeWord, and verified executable were not replaced. The runtime remains disabled in JARVIS by default.
+
+The reviewed machine-readable integration path is the official one-shot `hermes chat --quiet --query` CLI. JARVIS adds `--safe-mode`, one maximum turn, and the official empty `context_engine` toolset, then validates the complete stdout document as protocol 1.0 JSON. The adapter uses `shell=False`, exposes no Hermes-native execution tool, and now owns and cancels its exact subprocess and descendants during stop, shutdown, timeout, or emergency stop.
 
 ## Network and data handling
 
-Hermes supports OpenRouter and other providers, so prompts may leave the device according to provider configuration. Its messaging gateway can connect to external platforms and its optional tools can use network services. JARVIS will not populate Hermes credentials, enable gateway endpoints, expose API keys, or enable schedules/learning.
+Hermes supports OpenRouter and other providers, so plan prompts leave the device when a live provider request is explicitly made. Its messaging gateway can connect to external platforms and optional tools can use network services; none are enabled through JARVIS. Secrets remain in provider-supported external configuration and are not copied into source, logs, or reports. The attempted pilot was rate-limited before producing a model response.
 
 ## Sources
 

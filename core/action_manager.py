@@ -596,7 +596,7 @@ class ActionManager:
         if action.skill == "system":
             from skills import system_control
             if action.operation == "emergency_stop":
-                self.controller.agent.request_stop()
+                self.controller.stop_task()
                 self.controller.ctx.web_automation.emergency_stop()
                 self.controller.ctx.live_task.cancel()
                 return "Emergency stop completed."

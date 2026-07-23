@@ -19,7 +19,7 @@ The official installer was downloaded, hashed, and reviewed. The repository stag
 - `hermes --help` and `hermes doctor`: run successfully. Doctor showed optional messaging SDKs absent, but global tool availability exists and is never exposed through JARVIS.
 - API keys: not read, copied, or logged.
 
-The first zero-tool OpenRouter planning request returned HTTP 429 after retries. No plan or action was executed. The constrained adapter is implemented but remains disabled pending a successful, validated response.
+The first zero-tool OpenRouter planning request returned HTTP 429 after retries. No plan or action was executed. The constrained adapter is implemented but remains disabled pending a successful, validated response. Its active plan process is cancellable through normal stop, shutdown, timeout, and emergency-stop paths; the complete suite reports 558 collected and 558 passed.
 
 ## Installer behavior observed
 

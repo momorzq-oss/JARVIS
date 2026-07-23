@@ -1,8 +1,8 @@
-"""Minimal, non-executing Hermes connection adapter.
+"""Constrained Hermes connection adapter.
 
 The official audit does not identify a stable structured-planning HTTP API.
-Accordingly JARVIS supports disabled mode and narrowly scoped CLI diagnostics
-only; it never feeds an unrestricted prompt into Hermes or grants tools.
+Accordingly JARVIS uses the official quiet one-shot CLI for diagnostics and
+JSON planning; it never grants Hermes tools or executes returned actions.
 """
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ import json
 import os
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 from config import Config
@@ -31,6 +33,100 @@ class HermesAdapter:
         self.mode = (Config.HERMES_MODE if mode is None else mode).lower().strip()
         self.executable = (Config.HERMES_EXECUTABLE if executable is None else executable).strip()
         self.timeout = Config.HERMES_TIMEOUT_SECONDS if timeout is None else int(timeout)
+        self._cancel_event = threading.Event()
+        self._process_lock = threading.RLock()
+        self._process = None
+
+    @property
+    def running(self) -> bool:
+        with self._process_lock:
+            return self._process is not None and self._process.poll() is None
+
+    @staticmethod
+    def _terminate_owned_process(process) -> None:
+        """Stop only the process JARVIS launched, plus its exact descendants."""
+        descendants = []
+        try:
+            import psutil
+            root = psutil.Process(process.pid)
+            launched_at = getattr(process, "_jarvis_create_time", None)
+            if launched_at is not None and abs(root.create_time() - launched_at) < 0.001:
+                descendants = root.children(recursive=True)
+        except Exception:
+            descendants = []
+        for child in reversed(descendants):
+            try:
+                child.terminate()
+            except Exception:
+                pass
+        try:
+            process.terminate()
+        except Exception:
+            pass
+        try:
+            process.wait(timeout=2)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+        for child in reversed(descendants):
+            try:
+                if child.is_running():
+                    child.kill()
+            except Exception:
+                pass
+
+    def cancel(self) -> bool:
+        """Cancel the current adapter-owned request without matching by name."""
+        self._cancel_event.set()
+        with self._process_lock:
+            process = self._process
+        if process is None or process.poll() is not None:
+            return False
+        self._terminate_owned_process(process)
+        return True
+
+    def _run_cancellable(self, command, *, cwd=None):
+        self._cancel_event.clear()
+        try:
+            with self._process_lock:
+                process = subprocess.Popen(
+                    command, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, encoding="utf-8", errors="replace", cwd=cwd,
+                    **_background_process_kwargs(),
+                )
+                try:
+                    import psutil
+                    process._jarvis_create_time = psutil.Process(process.pid).create_time()
+                except Exception:
+                    process._jarvis_create_time = None
+                self._process = process
+            deadline = time.monotonic() + max(1, self.timeout)
+            while True:
+                if self._cancel_event.is_set():
+                    self._terminate_owned_process(process)
+                    raise HermesAdapterError("Hermes request cancelled")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._terminate_owned_process(process)
+                    raise HermesAdapterError("Hermes planning timed out")
+                try:
+                    stdout, stderr = process.communicate(timeout=min(0.1, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if self._cancel_event.is_set():
+                raise HermesAdapterError("Hermes request cancelled")
+            return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        except HermesAdapterError:
+            raise
+        except OSError as exc:
+            raise HermesAdapterError(f"Hermes planning failed: {exc}") from exc
+        finally:
+            with self._process_lock:
+                if self._process is locals().get("process"):
+                    self._process = None
 
     def _binary(self) -> str:
         candidate = self.executable or shutil.which("hermes")
@@ -88,13 +184,7 @@ class HermesAdapter:
             "Use only capability ids in this supplied request.\nREQUEST:\n" +
             json.dumps(request.to_dict(), ensure_ascii=True)
         )
-        try:
-            result = subprocess.run(self._pilot_command(prompt), shell=False, capture_output=True,
-                                    text=True, encoding="utf-8", errors="replace",
-                                    timeout=self.timeout, check=False,
-                                    cwd=str(Config.TEMP_DIR), **_background_process_kwargs())
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise HermesAdapterError(f"Hermes planning failed: {exc}") from exc
+        result = self._run_cancellable(self._pilot_command(prompt), cwd=str(Config.TEMP_DIR))
         if result.returncode:
             detail = (result.stderr or result.stdout or "Hermes plan request failed").strip()
             raise HermesAdapterError(detail[:500])

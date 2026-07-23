@@ -40,4 +40,10 @@ def hermes_health(adapter=None, *, probe=False) -> dict:
         adapter.diagnostic("--help")
     except HermesAdapterError as exc:
         return {"status": "unavailable", "detail": str(exc), "installed": False}
-    return {"status": "diagnostic_only", "detail": "CLI found; planning remains blocked", "installed": True}
+    return {
+        "status": "ready_for_pilot",
+        "detail": "CLI diagnostic passed; constrained planning is configured",
+        "installed": True,
+        "repository": str(runtime.repo),
+        "gateway": "OFFLINE",
+    }

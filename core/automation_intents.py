@@ -400,7 +400,13 @@ def _extract_topic(text, markers):
     for marker in markers:
         match = re.search(marker + r"\s+(.+?)[.!?]*$", text, re.I)
         if match:
-            return match.group(1).strip(" .")
+            topic = match.group(1).strip(" .")
+            topic = re.sub(
+                r"\s+(?:in|using|with)\s+(?:microsoft\s+)?"
+                r"(?:word|excel|power\s*point)\s*$",
+                "", topic, flags=re.I,
+            )
+            return topic.strip(" .")
     return ""
 
 

@@ -309,6 +309,23 @@ def test_context_followup_uses_current_word_application_without_cloud():
     assert ctx.router.calls == 0
 
 
+def test_office_creation_topic_drops_delivery_application_suffix():
+    presentation = select_route(
+        "Put together a four-slide presentation about local AI education in PowerPoint",
+        context(),
+    )["intent"]
+    spreadsheet = select_route(
+        "Make a budget for student expenses in Microsoft Excel",
+        context(),
+    )["intent"]
+
+    assert presentation["skill"] == "office.create_presentation"
+    assert presentation["params"]["topic"] == "local AI education"
+    assert presentation["params"]["slides"] == 4
+    assert spreadsheet["skill"] == "office.create_spreadsheet"
+    assert spreadsheet["params"]["topic"] == "student expenses"
+
+
 def test_supplied_word_text_and_explicit_save_use_local_context():
     ctx = context(state={
         "command_context": {"current_application": "Microsoft Word"},

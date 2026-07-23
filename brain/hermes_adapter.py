@@ -227,11 +227,35 @@ class HermesAdapter:
             raise HermesAdapterError("Hermes planning is disabled")
         if Config.HERMES_TOOL_ACCESS_MODE != "jarvis_registry_only":
             raise HermesAdapterError("Hermes tool access mode is not safe")
+        step_schema = {
+            "step_id": "step-1",
+            "capability_id": "registered capability ID",
+            "skill": "registered skill",
+            "operation": "registered operation",
+            "parameters": {},
+            "permission_scope": "scope from supplied capability",
+            "risk_level": "low",
+            "requires_confirmation": False,
+            "reversible": True,
+            "success_condition": "verifiable result",
+            "failure_strategy": "stop",
+        }
+        response_schema = {
+            "protocol_version": "1.0",
+            "task_id": request.task_id,
+            "status": "planned",
+            "summary": "safe user-facing plan summary",
+            "steps": [step_schema],
+        }
         prompt = (
-            "Return ONLY the JARVIS protocol 1.0 JSON plan. Do not call tools, write code, "
-            "use shell commands, access files, browse, schedule work, save memory, or delegate. "
-            "Use only capability ids in this supplied request.\nREQUEST:\n" +
-            json.dumps(request.to_dict(), ensure_ascii=True)
+            "Return ONLY one JSON object, with no Markdown fences or prose. "
+            "The object MUST have exactly these five top-level keys and every step MUST "
+            "have exactly the eleven shown step keys. Copy task_id exactly. "
+            "Set capability_id to skill + '.' + operation. Use only capability ids and "
+            "permission scopes supplied in REQUEST. Do not call tools, write code, use shell "
+            "commands, access files, browse, schedule work, save memory, or delegate.\n"
+            "RESPONSE_SCHEMA:\n" + json.dumps(response_schema, ensure_ascii=True) +
+            "\nREQUEST:\n" + json.dumps(request.to_dict(), ensure_ascii=True)
         )
         result = self._run_cancellable(self._pilot_command(prompt), cwd=str(Config.TEMP_DIR))
         if result.returncode:

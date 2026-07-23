@@ -139,6 +139,43 @@ def test_plan_decodes_official_quiet_output_as_utf8(monkeypatch):
     assert observed["errors"] == "replace"
 
 
+def test_plan_prompt_contains_the_exact_response_contract(monkeypatch):
+    request = HermesPlanRequest("goal", "request", [], {}, [], {}, [])
+    payload = {
+        "protocol_version": "1.0", "task_id": request.task_id,
+        "status": "planned", "summary": "Safe plan.", "steps": [],
+    }
+    observed = {}
+
+    class Process:
+        pid = -1
+        returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self, timeout=None):
+            return json.dumps(payload), ""
+
+    adapter = HermesAdapter(enabled=True, mode="cli")
+    def pilot_command(prompt):
+        observed["prompt"] = prompt
+        return ["hermes"]
+
+    monkeypatch.setattr(adapter, "_pilot_command", pilot_command)
+    monkeypatch.setattr(
+        "brain.hermes_adapter.subprocess.Popen", lambda *args, **kwargs: Process(),
+    )
+
+    adapter.plan(request)
+
+    prompt = observed["prompt"]
+    assert "exactly these five top-level keys" in prompt
+    assert '"status": "planned"' in prompt
+    assert '"success_condition": "verifiable result"' in prompt
+    assert "Copy task_id exactly" in prompt
+
+
 def test_active_plan_process_is_cancelled_and_cleared(monkeypatch):
     request = HermesPlanRequest("goal", "request", [], {}, [], {}, [])
     started = threading.Event()

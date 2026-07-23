@@ -166,19 +166,21 @@ def test_voice_toggle_calls_controller(window, monkeypatch):
     assert calls == {"start": 1, "stop": 1}
 
 
-def test_piper_completion_restores_live_wake_state(window):
-    window._slot_voicestate({
+def test_status_bridge_restores_live_wake_state_after_piper_completion(window):
+    window.gc._forward_status({
         "speaker_state": "speaking",
         "microphone_active": True,
         "wakeword_active": True,
     })
+    QApplication.processEvents()
     assert window.core._state == "speaking"
 
-    window._slot_voicestate({
+    window.gc._forward_status({
         "speaker_state": "ready",
         "microphone_active": True,
         "wakeword_active": True,
     })
+    QApplication.processEvents()
     assert window.core._state == "listening_wake"
     assert "Waiting for Hey Jarvis" in window.dashboard.state_banner.text()
 

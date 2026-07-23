@@ -324,6 +324,12 @@ class GuiController(QObject):
         self.bridge.statusChanged.emit(value)
         if not isinstance(value, dict):
             return
+        # The frequent status snapshot is also the only guaranteed observer
+        # after asynchronous Piper playback completes. Forward its
+        # authoritative VoiceState fields so speech_finished and the dashboard
+        # cannot remain stuck on SPEAKING when no command event follows.
+        if "speaker_state" in value:
+            self._forward_voicestate(value)
         self.bridge.system_metrics_changed.emit(value.get("system_metrics", {}))
         self.bridge.hermes_state_changed.emit(
             str(value.get("hermes", "disabled")),

@@ -81,3 +81,16 @@ Final release classification: **NOT READY** pending human voice validation. Do n
 - The current source suite reports 606 collected, 606 passed, 0 failed, and 0 skipped.
 
 Current production classification: **NOT READY**. Existing candidate classification: **AUDIO PASS, STILL UNPROMOTED** pending the remaining Hermes and full candidate gates.
+
+## 2026-07-23 University Assignment Candidate Validation
+
+- Validated the untouched recovery candidate at `release\candidates\JARVIS-FULL-COMMAND-RECOVERY-20260723-100804\JARVIS\JARVIS.exe`.
+- `Write a 300-word APA 7 essay about renewable energy for undergraduate level live in Word.` correctly entered `university.assignment`, opened a JARVIS-owned Word document, added public references, and requested a save location.
+- The natural save follow-up `Save it to ...\.test_tmp as packaged university assignment validation.` was misclassified as a new university assignment because the filename contained “university assignment”.
+- After cancelling that mistaken pending state, an explicit `.docx` save request fell through to `chat` instead of completing the Word save workflow.
+- Exact COM recovery preserved the JARVIS-owned document at `.test_tmp\packaged_university_validation.docx` without closing or modifying another Word document. This recovery was external validation work and is not counted as a packaged save pass.
+- The recovered document was readable, contained 17 paragraphs, 129 words, a References heading, and six URL occurrences. It therefore also failed the requested 300-word output target.
+- The candidate exited cleanly. The source desktop shortcut then launched source JARVIS successfully and its GUI became responsive.
+- Source regression coverage already protects a pending save filename from restarting University Assignment Mode; the stale candidate predates that correction.
+
+Existing candidate assignment classification: **FAIL — SAVE ROUTING AND WORD-COUNT TARGET**. The candidate remains unpromoted and must be rebuilt only after the mandatory Hermes gates pass.

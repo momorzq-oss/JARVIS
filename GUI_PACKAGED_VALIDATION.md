@@ -64,3 +64,9 @@ The packaged cinematic PySide6 interface launched maximized, rendered at 1920x10
 - GPU metrics and unsupported live previews correctly remain `Unavailable`.
 
 Release status: **NOT READY** until the required human-spoken packaged command succeeds.
+
+## 2026-07-23 Recovery-Candidate Assignment Check
+
+The existing full-command-recovery candidate kept its GUI responsive while it created a live University Assignment Word document. Mission-control routing correctly showed `university.assignment`, but the natural save follow-up was routed back into assignment creation and a later explicit `.docx` save request fell through to chat. Exact external COM recovery saved only the JARVIS-owned document under `.test_tmp`; the resulting document contained 129 words rather than the requested 300. The candidate shut down cleanly and source JARVIS relaunched responsively from the desktop shortcut.
+
+Candidate GUI assignment result: **FAIL**. This candidate is stale relative to the source routing regression fix and remains unpromoted.

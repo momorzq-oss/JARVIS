@@ -153,6 +153,67 @@ def test_visible_dialog_timeout_is_owned_by_gui_timer(qapp, confirmation_env):
     assert executed == []
 
 
+def test_concurrent_confirmations_receive_independent_decisions(
+    qapp, confirmation_env,
+):
+    controller, gui = confirmation_env
+    executed = []
+    results = {}
+
+    def run(name):
+        intent = {"skill": "app.close", "params": {"target": "__all__"}}
+        results[name] = controller.action_manager.execute_intent(
+            intent, lambda: executed.append(name) or f"{name} closed",
+        )
+
+    first = threading.Thread(target=run, args=("first",), daemon=True)
+    second = threading.Thread(target=run, args=("second",), daemon=True)
+    first.start()
+    deadline = time.time() + 1.0
+    while not gui.confirmation_pending() and time.time() < deadline:
+        time.sleep(0.005)
+    assert gui.confirmation_pending()
+    second.start()
+    dialogs = []
+
+    def deny_second_when_visible():
+        dialog = gui._confirmation_dialog
+        if (
+            dialog is not None
+            and dialogs
+            and dialog is not dialogs[0]
+            and dialog.isVisible()
+        ):
+            dialogs.append(dialog)
+            _button(dialog, "Deny").click()
+        elif second.is_alive():
+            QTimer.singleShot(5, deny_second_when_visible)
+
+    def approve_first_when_visible():
+        dialog = gui._confirmation_dialog
+        if dialog is not None and dialog.isVisible():
+            dialogs.append(dialog)
+            _button(dialog, "Approve Once").click()
+            QTimer.singleShot(0, deny_second_when_visible)
+        elif first.is_alive():
+            QTimer.singleShot(5, approve_first_when_visible)
+
+    QTimer.singleShot(0, approve_first_when_visible)
+    deadline = time.time() + 3.0
+    while (first.is_alive() or second.is_alive()) and time.time() < deadline:
+        qapp.processEvents()
+        time.sleep(0.005)
+    first.join(timeout=0.2)
+    second.join(timeout=0.2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert len(dialogs) == 2
+    assert results["first"] == "first closed"
+    assert results["second"] == "Action denied by user."
+    assert executed == ["first"]
+
+
 def test_deny_keeps_action_from_running(qapp, confirmation_env):
     controller, gui = confirmation_env
     result, executed = _run_confirmation(

@@ -127,6 +127,7 @@ class GuiController(QObject):
         self._confirmation_response = threading.Event()
         self._confirmation_presented = threading.Event()
         self._confirmation_pending = threading.Event()
+        self._confirmation_request_lock = threading.Lock()
         self._confirmation_decision = "deny"
         self._confirmation_dialog = None
         self.confirmation_timeout_ms = 60000
@@ -260,6 +261,15 @@ class GuiController(QObject):
 
     def _confirmation_handler_from_agent(self, action: Action) -> bool:
         """Receives confirmation request from agent (worker thread) and routes to GUI thread."""
+        # The dialog/events below intentionally represent one request.  Queue
+        # concurrent callers here so a decision can never release or approve
+        # a different action that happened to arrive at the same time.
+        with self._confirmation_request_lock:
+            if self._shutdown_started:
+                return "cancel_task"
+            return self._confirmation_handler_serialized(action)
+
+    def _confirmation_handler_serialized(self, action: Action) -> bool:
         self._confirmation_decision = "deny"
         self._confirmation_response.clear() # Clear event for new request
         self._confirmation_presented.clear()

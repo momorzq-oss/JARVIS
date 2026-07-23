@@ -75,3 +75,30 @@ def test_updated_task_snapshots_are_detached_from_internal_lists():
     assert stored.capabilities_used == ["research.search_web"]
     assert stored.permissions == ["NETWORK_PUBLIC_READ"]
     assert stored.output_files == ["result.json"]
+
+
+@pytest.mark.parametrize("terminal", ["COMPLETED", "FAILED", "CANCELLED"])
+def test_terminal_tasks_cannot_be_resurrected(terminal):
+    manager = HermesTaskManager(max_concurrent=1)
+    task = manager.create("terminal state")
+    if terminal == "CANCELLED":
+        manager.cancel(task.task_id)
+    else:
+        manager.transition(task.task_id, "RUNNING")
+        manager.transition(task.task_id, terminal)
+
+    with pytest.raises(RuntimeError, match="invalid Hermes task transition"):
+        manager.transition(task.task_id, "RUNNING")
+    assert manager.get(task.task_id).status == terminal
+
+
+def test_task_manager_rejects_impossible_pause_and_planning_sequences():
+    manager = HermesTaskManager(max_concurrent=2)
+    queued = manager.create("queued")
+    with pytest.raises(RuntimeError, match="QUEUED -> PAUSED"):
+        manager.pause(queued.task_id)
+
+    planning = manager.create("planning")
+    manager.transition(planning.task_id, "PLANNING")
+    with pytest.raises(RuntimeError, match="PLANNING -> COMPLETED"):
+        manager.transition(planning.task_id, "COMPLETED")

@@ -10,6 +10,19 @@ from config import Config
 
 TASK_STATUSES = frozenset({"QUEUED", "PLANNING", "WAITING_CONFIRMATION", "RUNNING", "PAUSED",
                            "RETRYING", "ROLLING_BACK", "COMPLETED", "FAILED", "CANCELLED"})
+TERMINAL_TASK_STATUSES = frozenset({"COMPLETED", "FAILED", "CANCELLED"})
+TASK_TRANSITIONS = {
+    "QUEUED": frozenset({"PLANNING", "WAITING_CONFIRMATION", "RUNNING", "FAILED", "CANCELLED"}),
+    "PLANNING": frozenset({"WAITING_CONFIRMATION", "FAILED", "CANCELLED"}),
+    "WAITING_CONFIRMATION": frozenset({"RUNNING", "FAILED", "CANCELLED"}),
+    "RUNNING": frozenset({"PAUSED", "RETRYING", "ROLLING_BACK", "COMPLETED", "FAILED", "CANCELLED"}),
+    "PAUSED": frozenset({"RUNNING", "ROLLING_BACK", "FAILED", "CANCELLED"}),
+    "RETRYING": frozenset({"RUNNING", "PAUSED", "ROLLING_BACK", "FAILED", "CANCELLED"}),
+    "ROLLING_BACK": frozenset({"COMPLETED", "FAILED", "CANCELLED"}),
+    "COMPLETED": frozenset(),
+    "FAILED": frozenset(),
+    "CANCELLED": frozenset(),
+}
 
 
 @dataclasses.dataclass
@@ -77,12 +90,16 @@ class HermesTaskManager:
             raise ValueError("unknown Hermes task status")
         with self._lock:
             task = self._tasks[task_id]
+            if status != task.status and status not in TASK_TRANSITIONS[task.status]:
+                raise RuntimeError(
+                    f"invalid Hermes task transition: {task.status} -> {status}"
+                )
             if task.cancellation_token and status not in {"CANCELLED", "FAILED"}:
                 raise RuntimeError("task is cancelled")
             task.status, task.updated_at = status, time.time()
             if status == "RUNNING" and task.started_at is None:
                 task.started_at = task.updated_at
-            if status in {"COMPLETED", "FAILED", "CANCELLED"}:
+            if status in TERMINAL_TASK_STATUSES:
                 task.completed_at = task.updated_at
             if error:
                 task.last_error = str(error)

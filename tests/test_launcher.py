@@ -23,3 +23,15 @@ def test_build_watchdog_survives_transient_wmi_failure():
     assert "Get-CimInstance Win32_Process -ErrorAction Stop" in watchdog
     assert "catch {" in watchdog
     assert "return @($ids)" in watchdog
+
+
+def test_shortcut_installer_creates_desktop_and_start_menu_entries():
+    installer = (PROJECT_ROOT / "install_shortcuts.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "GetFolderPath('Desktop')" in installer
+    assert "GetFolderPath('Programs')" in installer
+    assert "System32\\wscript.exe" in installer
+    assert "Launch JARVIS.vbs" in installer
+    assert "Install-JarvisShortcut" in installer

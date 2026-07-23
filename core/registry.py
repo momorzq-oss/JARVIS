@@ -83,6 +83,62 @@ def _cleanup_verified_process(entry):
         return False
 
 
+def _close_verified_process(entry, grace_seconds=1.0):
+    """Close the exact dedicated process behind a verified hosted window.
+
+    Store applications can hide their ApplicationFrameHost window before the
+    real app process removes a replacement CoreWindow.  Validate the captured
+    process creation time, ask every top-level window owned by that exact PID
+    to close, then use the same bounded dedicated-process fallback already
+    permitted by ``terminate_pid_on_close``.
+    """
+    pid = entry.get("pid")
+    extra = entry.get("extra") or {}
+    try:
+        expected_create_time = float(extra.get("process_create_time"))
+    except (TypeError, ValueError):
+        return False
+    if not pid:
+        return False
+    try:
+        import ctypes
+        import psutil
+        from ctypes import wintypes
+
+        process = psutil.Process(int(pid))
+        if abs(process.create_time() - expected_create_time) >= 0.001:
+            return False
+
+        user32 = ctypes.windll.user32
+        callback_type = ctypes.WINFUNCTYPE(
+            wintypes.BOOL, wintypes.HWND, wintypes.LPARAM,
+        )
+
+        def visit(hwnd, _parameter):
+            process_id = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+            if process_id.value == int(pid) and user32.IsWindow(hwnd):
+                user32.PostMessageW(hwnd, 0x0010, 0, 0)
+            return True
+
+        callback = callback_type(visit)
+        user32.EnumWindows(callback, 0)
+        try:
+            process.wait(timeout=max(0.0, float(grace_seconds)))
+            return True
+        except psutil.TimeoutExpired:
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except psutil.TimeoutExpired:
+                process.kill()
+            return True
+    except psutil.NoSuchProcess:
+        return True
+    except Exception:
+        return False
+
+
 class SessionRegistry:
     def __init__(self, path):
         self.path = Path(path)
@@ -387,6 +443,9 @@ class SessionRegistry:
         cleanup_after_window = str(
             extra.get("cleanup_pid_after_window_close", "")
         ).strip().lower() in {"1", "true", "yes"}
+        explicit_termination = str(
+            extra.get("terminate_pid_on_close", "")
+        ).strip().lower() in {"1", "true", "yes"}
         window_close_failed = False
         if hwnd:
             try:
@@ -396,6 +455,8 @@ class SessionRegistry:
                 if _native_window_closed(user32, hwnd):
                     if cleanup_after_window:
                         _cleanup_verified_process(entry)
+                    elif explicit_termination:
+                        _close_verified_process(entry)
                     return True
                 if user32.IsWindow(int(hwnd)):
                     user32.PostMessageW(int(hwnd), WM_CLOSE, 0, 0)
@@ -407,6 +468,8 @@ class SessionRegistry:
                     if _native_window_closed(user32, hwnd):
                         if cleanup_after_window:
                             _cleanup_verified_process(entry)
+                        elif explicit_termination:
+                            _close_verified_process(entry)
                         return True
                     window_close_failed = True
             except Exception:
@@ -417,9 +480,6 @@ class SessionRegistry:
         # ApplicationFrameHost, and reused Office/browser processes must never
         # be killed just because one owned HWND ignored WM_CLOSE.
         pid = entry.get("pid")
-        explicit_termination = str(
-            extra.get("terminate_pid_on_close", "")
-        ).strip().lower() in {"1", "true", "yes"}
         if pid and (not hwnd or explicit_termination):
             try:
                 import psutil

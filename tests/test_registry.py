@@ -1,4 +1,8 @@
-from core.registry import SessionRegistry, _native_window_closed, _cleanup_verified_process
+from core.registry import (
+    SessionRegistry,
+    _cleanup_verified_process,
+    _native_window_closed,
+)
 from skills.system_control import close_thing
 
 
@@ -108,6 +112,26 @@ def test_already_closed_verified_window_is_successful_cleanup(tmp_path, monkeypa
     entry = registry.register("app", "Calculator", pid=None, hwnd=999999)
 
     assert registry._close_entry(entry) is True
+
+
+def test_closed_host_frame_closes_exact_verified_child_process(tmp_path, monkeypatch):
+    registry = SessionRegistry(tmp_path / "registry.json")
+    entry = registry.register(
+        "app", "Calculator", pid=84, hwnd=1001,
+        extra={
+            "terminate_pid_on_close": True,
+            "process_create_time": 123.5,
+        },
+    )
+    closed = []
+    monkeypatch.setattr("core.registry._native_window_closed", lambda *_args: True)
+    monkeypatch.setattr(
+        "core.registry._close_verified_process",
+        lambda value: closed.append(value["pid"]) or True,
+    )
+
+    assert registry._close_entry(entry) is True
+    assert closed == [84]
 
 
 def test_closed_owned_folder_cleans_exact_factory_process(tmp_path, monkeypatch):

@@ -97,6 +97,7 @@ def test_redirected_application_registers_verified_window_pid(monkeypatch):
         system_control, "_verify_launched_app",
         lambda _target, _hwnds, _pids: (99, 1200, "Untitled - Notepad"),
     )
+    monkeypatch.setattr(system_control, "_process_create_time", lambda _pid: 123.5)
 
     assert system_control._launch_resolved(target, ctx) == "Opening notepad."
     _, metadata = registrations[0]
@@ -106,6 +107,7 @@ def test_redirected_application_registers_verified_window_pid(monkeypatch):
     assert metadata["extra"]["launcher_pid"] == 42
     assert metadata["extra"]["verified_window"] is True
     assert metadata["extra"]["terminate_pid_on_close"] is True
+    assert metadata["extra"]["process_create_time"] == 123.5
 
 
 def test_application_window_verification_ignores_hidden_launcher(monkeypatch):

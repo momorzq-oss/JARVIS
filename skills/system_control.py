@@ -546,6 +546,9 @@ def _launch_resolved(target, ctx):
                 and pid not in existing_window_pids
                 and actual_process_name.lower() != "applicationframehost.exe"
             )
+            process_create_time = (
+                _process_create_time(pid) if terminate_pid_on_close else None
+            )
             ctx.registry.register("app", target.name, pid=pid, hwnd=hwnd,
                                   window_title=window_title,
                                   exe_path=target.value,
@@ -554,6 +557,10 @@ def _launch_resolved(target, ctx):
                                       "launcher_pid": proc.pid,
                                       "verified_window": True,
                                       "terminate_pid_on_close": terminate_pid_on_close,
+                                      "process_create_time": (
+                                          process_create_time
+                                          if process_create_time is not None else ""
+                                      ),
                                   })
             return f"Opening {target.name}."
         except OSError:

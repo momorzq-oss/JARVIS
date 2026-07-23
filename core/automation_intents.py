@@ -435,6 +435,89 @@ def _strip_request_scaffolding(text):
     return re.sub(r"\s+", " ", value).strip()
 
 
+def _classify_whatsapp_intent(text, state=None):
+    """Extract WhatsApp action, contact, and message without a model call."""
+    request = _strip_request_scaffolding(text).strip(" .!?")
+    low = request.lower()
+    context_contact = ""
+    if isinstance(state, dict):
+        context_contact = str(state.get("whatsapp_contact") or "").strip()
+
+    # A follow-up after opening or reading a chat may omit the application and
+    # contact. Only enable that shortcut when WhatsApp itself recorded the
+    # current contact in compact command state.
+    if "whatsapp" not in low:
+        followup = re.fullmatch(
+            r"(?:reply|respond)(?:\s+to\s+(?:them|him|her))?"
+            r"(?:\s+and)?\s+(?:say|saying|with)\s+(.+)",
+            request, re.I,
+        )
+        if followup and context_contact:
+            return {
+                "skill": "whatsapp.reply",
+                "params": {
+                    "contact": context_contact,
+                    "message": followup.group(1).strip(" .!?"),
+                },
+            }
+        return None
+
+    # Remove platform-placement phrases but retain "WhatsApp message", which
+    # is a useful noun in send requests.
+    normalized = re.sub(
+        r"\s+(?:on|via|through|using)\s+whatsapp\b", "", request,
+        flags=re.I,
+    ).strip()
+
+    reply_patterns = (
+        r"^(?:reply|respond)\s+to\s+(.+?)"
+        r"(?:(?:\s+and)?\s+(?:say|saying|with)\s+(.+))?$",
+        r"^(?:send|write)\s+(?:a\s+)?(?:whatsapp\s+)?message\s+to\s+(.+?)"
+        r"(?:\s+(?:saying|that\s+says|with(?:\s+the\s+message)?)\s+(.+))?$",
+        r"^(?:send|write)\s+(.+?)\s+(?:a\s+)?whatsapp\s+message"
+        r"(?:\s+(?:saying|that\s+says|with(?:\s+the\s+message)?)\s+(.+))?$",
+        r"^(?:message|text)\s+(.+?)"
+        r"(?:(?:\s+and)?\s+(?:say|saying|with)\s+(.+))?$",
+    )
+    for pattern in reply_patterns:
+        match = re.fullmatch(pattern, normalized, re.I)
+        if match:
+            contact = match.group(1).strip(" .!?")
+            message = (match.group(2) or "").strip(" .!?")
+            if contact.lower() in {"them", "him", "her"} and context_contact:
+                contact = context_contact
+            return {
+                "skill": "whatsapp.reply",
+                "params": {"contact": contact, "message": message},
+            }
+
+    read_match = re.fullmatch(
+        r"(?:check|read|show|view|get|open)\s+(?:my\s+)?(?:latest\s+)?"
+        r"(?:whatsapp\s+)?(?:messages?|chat|conversation)"
+        r"(?:\s+(?:with|from)\s+(.+))?",
+        normalized, re.I,
+    )
+    if read_match:
+        return {
+            "skill": "whatsapp.read",
+            "params": {"contact": (read_match.group(1) or "").strip(" .!?")},
+        }
+    said_match = re.fullmatch(r"what did (.+?) say", normalized, re.I)
+    if said_match:
+        return {
+            "skill": "whatsapp.read",
+            "params": {"contact": said_match.group(1).strip(" .!?")},
+        }
+
+    if re.fullmatch(
+        r"(?:open|launch|start|show|bring up|go to)\s+(?:my\s+)?whatsapp"
+        r"(?:\s+(?:desktop|app|application))?",
+        normalized, re.I,
+    ):
+        return {"skill": "whatsapp.open", "params": {}}
+    return None
+
+
 def _extract_explicit_windows_path(text):
     """Return a literal drive or UNC path embedded in command prose.
 
@@ -595,6 +678,10 @@ def classify_local_intent(text, state=None):
         return {"skill": "task.resume", "params": {}}
     if re.fullmatch(r"(?:cancel|stop)(?: (?:typing|the task|the current task))?", low):
         return {"skill": "task.cancel", "params": {}}
+
+    whatsapp = _classify_whatsapp_intent(request, state)
+    if whatsapp is not None:
+        return whatsapp
 
     context = state.get("command_context", {}) if isinstance(state, dict) else {}
 

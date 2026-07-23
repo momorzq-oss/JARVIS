@@ -1,6 +1,6 @@
 # Hermes Packaged Validation
 
-A new Hermes candidate was intentionally not built. The supported Python 3.12 suite is complete at 627 collected, 627 passed, 0 failed, and 0 skipped. One real zero-tool response failed exact-schema validation and four later exact-schema requests returned HTTP 429, so the required Hermes pilots have not all passed.
+A new Hermes candidate was intentionally not built. The supported Python 3.12 suite is complete at 635 collected, 635 passed, 0 failed, and 0 skipped. One real zero-tool response failed exact-schema validation and four later exact-schema requests returned HTTP 429, so the required Hermes pilots have not all passed.
 
 Non-destructive package comparison on 2026-07-23 confirmed that the untouched production executable fails current typed-response Piper validation while the pre-existing full-command-recovery candidate completes bundled frozen-Piper greeting and command playback. This does not satisfy the Hermes candidate gate and neither build was promoted.
 

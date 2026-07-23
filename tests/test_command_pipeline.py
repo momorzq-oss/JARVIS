@@ -317,6 +317,53 @@ def test_context_followup_uses_current_word_application_without_cloud():
     assert ctx.router.calls == 0
 
 
+@pytest.mark.parametrize(
+    ("phrase", "expected"),
+    (
+        ("Could you open WhatsApp for me?", {
+            "skill": "whatsapp.open", "params": {},
+        }),
+        ("Check my WhatsApp messages", {
+            "skill": "whatsapp.read", "params": {"contact": ""},
+        }),
+        ("Read my WhatsApp chat with Alice", {
+            "skill": "whatsapp.read", "params": {"contact": "Alice"},
+        }),
+        ("What did Alice say on WhatsApp?", {
+            "skill": "whatsapp.read", "params": {"contact": "Alice"},
+        }),
+        ("Send Alice a WhatsApp message saying hello", {
+            "skill": "whatsapp.reply",
+            "params": {"contact": "Alice", "message": "hello"},
+        }),
+        ("Reply to Alice on WhatsApp and say hello", {
+            "skill": "whatsapp.reply",
+            "params": {"contact": "Alice", "message": "hello"},
+        }),
+    ),
+)
+def test_whatsapp_language_uses_shared_local_extraction(phrase, expected):
+    ctx = context()
+
+    route = select_route(phrase, ctx)
+
+    assert route["intent"] == expected
+    assert route["selected_engine"] == "deterministic"
+    assert ctx.router.calls == 0
+
+
+def test_whatsapp_contextual_reply_reuses_verified_current_contact():
+    ctx = context(state={"whatsapp_contact": "Alice"})
+
+    route = select_route("Reply to them saying I will call later", ctx)
+
+    assert route["intent"] == {
+        "skill": "whatsapp.reply",
+        "params": {"contact": "Alice", "message": "I will call later"},
+    }
+    assert ctx.router.calls == 0
+
+
 def test_office_creation_topic_drops_delivery_application_suffix():
     presentation = select_route(
         "Put together a four-slide presentation about local AI education in PowerPoint",

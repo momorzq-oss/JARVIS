@@ -139,18 +139,31 @@ def send_text(text):
 # Actions
 # ===========================================================================
 def read_chat(contact, ctx):
-    win = open_chat(contact, ctx)
+    contact = (contact or "").strip()
+    # A general "check my WhatsApp messages" request means the currently
+    # visible conversation. Never search the official client for an empty
+    # contact or invent a contact name.
+    win = open_chat(contact, ctx) if contact else _connect_window()
     if win is None:
+        if not contact:
+            return "I couldn't find the WhatsApp Desktop window, sir."
         return (f"I couldn't find the chat with {contact}, sir. "
                 f"Is that the exact contact name?")
     msgs = read_visible_messages(win, limit=10)
-    ctx.state["whatsapp_contact"] = contact
+    if contact:
+        ctx.state["whatsapp_contact"] = contact
     if msgs:
         ctx.state["whatsapp_last"] = msgs[-1]
+    if not msgs and not contact:
+        return ("The visible WhatsApp conversation is open, sir, but I "
+                "couldn't read its messages. WhatsApp's UI may be obscured.")
     if not msgs:
         return (f"The chat with {contact} is open, sir, but I couldn't "
                 f"read its messages — WhatsApp's UI may be obscured.")
-    lines = [f"Latest messages with {contact}, sir:"]
+    lines = [
+        f"Latest messages with {contact}, sir:"
+        if contact else "Latest visible WhatsApp messages, sir:"
+    ]
     for m in msgs[-5:]:
         lines.append(m.replace("\n", " ")[:160])
     return " ".join(lines)

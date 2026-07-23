@@ -28,7 +28,7 @@ def _activate_existing_window():
     Showing a tray-hidden QWidget through ``ShowWindow`` alone leaves Qt's
     internal visibility state out of sync with Windows.  On some systems that
     produces a title bar with a blank white client area.  A named event lets
-    the existing GUI call ``showNormal`` on its own GUI thread instead.
+    the existing GUI restore its maximized window on its own GUI thread.
     """
     if os.name != "nt":
         return
@@ -196,6 +196,19 @@ def _finish_background_startup(controller, bridge, registry_items):
 def _queue_deferred_capability_scan(schedule, run_async, scan, delay_ms=20_000):
     """Queue inventory after auto-voice and its first Piper greeting settle."""
     schedule(int(delay_ms), lambda: run_async(scan))
+
+
+def _restore_main_window(window):
+    """Restore Mission Control without reapplying its oversized normal geometry.
+
+    The designed 1680x940 normal size becomes 2520 physical pixels on a 150%
+    scaled display.  Calling ``showNormal`` from the single-instance activation
+    path therefore stretched JARVIS across two monitors.  The application is
+    launched maximized, so activation must preserve that screen-bounded mode.
+    """
+    window.showMaximized()
+    window.raise_()
+    window.activateWindow()
 
 
 def main(argv=None):
@@ -428,9 +441,7 @@ def main(argv=None):
     window.minimizeRequested.connect(minimize_to_tray)
 
     def show_window():
-        window.showNormal()
-        window.raise_()
-        window.activateWindow()
+        _restore_main_window(window)
 
     tray.openRequested.connect(show_window)
 

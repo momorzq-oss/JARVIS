@@ -4,6 +4,7 @@ from desktop_main import (
     _auto_voice_requested,
     _parse_args,
     _queue_deferred_capability_scan,
+    _restore_main_window,
     _run_background_startup,
     _startup_preload_enabled,
 )
@@ -138,3 +139,25 @@ def test_deferred_capability_scan_runs_once_after_voice_settle_delay():
     assert scheduled[0][0] == 20_000
     scheduled[0][1]()
     assert events == ["queued", "scan"]
+
+
+def test_single_instance_activation_preserves_screen_bounded_maximized_mode():
+    calls = []
+
+    class Window:
+        def showMaximized(self):
+            calls.append("maximized")
+
+        def showNormal(self):
+            calls.append("normal")
+
+        def raise_(self):
+            calls.append("raised")
+
+        def activateWindow(self):
+            calls.append("activated")
+
+    _restore_main_window(Window())
+
+    assert calls == ["maximized", "raised", "activated"]
+    assert "normal" not in calls

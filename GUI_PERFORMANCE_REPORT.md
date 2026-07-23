@@ -30,3 +30,7 @@ Evidence:
 ## Scaled Layout Result
 
 The three dashboard columns remain accessible at the active 1080p-class scaled desktop. Vertical overflow uses per-column scroll areas, preventing panel overlap. The center AI core no longer overlaps execution-summary panels at 150% Windows scaling.
+
+## 2026-07-23 Activation Geometry Regression
+
+The single-instance shortcut activation path previously called `showNormal()`. On the 150%-scaled primary display, that restored the designed 1680x940 logical size as a 2520-pixel physical window spanning both monitors. The activation path now preserves the maximized mode used at startup. Live validation showed a screen-bounded `(0, 34)-(1920, 1007)` window before and after a second Desktop-shortcut activation, exactly one JARVIS process, and a responsive painted client area. The supported Python 3.12 suite reports 592 collected, 592 passed, 0 failed, and 0 skipped.

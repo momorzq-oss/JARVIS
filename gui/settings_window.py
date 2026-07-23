@@ -6,7 +6,9 @@ Real audio device dropdowns (input + output), Refresh, live Test Microphone
 (Piper). The OpenRouter API key is never shown or stored here.
 """
 import numpy as np
-from PySide6.QtCore import Qt, QTimer
+import threading
+
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QDialog, QLabel, QPushButton, QLineEdit, QComboBox, QCheckBox,
     QDoubleSpinBox, QVBoxLayout, QHBoxLayout, QFormLayout, QFileDialog,
@@ -15,6 +17,8 @@ from PySide6.QtWidgets import (
 
 
 class SettingsWindow(QDialog):
+    hermes_probe_completed = Signal(object)
+
     def __init__(self, settings_store, gui_controller=None, parent=None):
         super().__init__(parent)
         self.store = settings_store
@@ -25,9 +29,12 @@ class SettingsWindow(QDialog):
         self._test_stream = None
         self._test_frames = []
         self._test_timer = None
+        self._hermes_probe_running = False
+        self.hermes_probe_completed.connect(self._apply_hermes_probe)
         self._build()
         self._load()
         self._populate_devices()
+        self._on_test_hermes()
 
     # ================================================================== UI
     def _build(self):
@@ -238,9 +245,30 @@ class SettingsWindow(QDialog):
         return w
 
     def _on_test_hermes(self):
+        if self._hermes_probe_running:
+            return
+        self._hermes_probe_running = True
+        self.btn_test_hermes.setEnabled(False)
+        self.hermes_status.setText("Checking installed Hermes runtime…")
+
+        def probe():
+            result = {}
+            try:
+                from brain.hermes_runtime_manager import HermesRuntimeManager
+                result = HermesRuntimeManager().snapshot()
+            except Exception as exc:
+                result = {"state": "FAILED", "detail": str(exc)}
+            self.hermes_probe_completed.emit(result)
+
+        threading.Thread(
+            target=probe, name="JARVIS-Hermes-Settings-Probe", daemon=True,
+        ).start()
+
+    def _apply_hermes_probe(self, status):
+        status = status if isinstance(status, dict) else {}
+        self._hermes_probe_running = False
+        self.btn_test_hermes.setEnabled(True)
         try:
-            from brain.hermes_runtime_manager import HermesRuntimeManager
-            status = HermesRuntimeManager().snapshot()
             self.hermes_status.setText(f"{status.get('state')}: {status.get('detail')}")
         except Exception as exc:
             self.hermes_status.setText(f"FAILED: {exc}")

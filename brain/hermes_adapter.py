@@ -262,4 +262,28 @@ class HermesAdapter:
             raw_detail = (result.stderr or result.stdout or "Hermes plan request failed").strip()
             detail = _session_failure_detail(raw_detail) or raw_detail
             raise HermesAdapterError(detail[:500])
-        return parse_plan_json(result.stdout)
+        supplied = {}
+        for capability in request.available_capabilities:
+            if not isinstance(capability, dict):
+                continue
+            capability_id = str(
+                capability.get("capability_id") or capability.get("id") or ""
+            ).strip()
+            if capability_id:
+                supplied[capability_id] = capability
+        plan = parse_plan_json(
+            result.stdout, allowed_capabilities=frozenset(supplied),
+        )
+        for step in plan["steps"]:
+            capability = supplied[step["capability_id"]]
+            expected_scope = str(
+                capability.get("permission_scope") or capability.get("permission") or ""
+            ).strip()
+            if expected_scope and step["permission_scope"] != expected_scope:
+                raise HermesAdapterError("Hermes permission scope contradicts supplied capability")
+            expected_risk = str(
+                capability.get("risk_level") or capability.get("risk") or ""
+            ).strip().lower()
+            if expected_risk and step["risk_level"] != expected_risk:
+                raise HermesAdapterError("Hermes risk level contradicts supplied capability")
+        return plan

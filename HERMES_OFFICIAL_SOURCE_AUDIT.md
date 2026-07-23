@@ -22,7 +22,7 @@ The reviewed machine-readable integration path is the official one-shot `hermes 
 
 ## Network and data handling
 
-Hermes supports OpenRouter and other providers, so plan prompts leave the device when a live provider request is explicitly made. Its messaging gateway can connect to external platforms and optional tools can use network services; none are enabled through JARVIS. Secrets remain in provider-supported external configuration and are not copied into source, logs, or reports. The attempted pilot was rate-limited before producing a model response.
+Hermes supports OpenRouter and other providers, so plan prompts leave the device when a live provider request is explicitly made. Its messaging gateway can connect to external platforms and optional tools can use network services; none are enabled through JARVIS. Secrets remain in provider-supported external configuration and are not copied into source, logs, or reports. One attempted pilot produced a schema-invalid model response that JARVIS rejected; four later exact-schema attempts were rate-limited upstream before producing a response.
 
 ## Sources
 

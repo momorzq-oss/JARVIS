@@ -176,6 +176,68 @@ def test_plan_prompt_contains_the_exact_response_contract(monkeypatch):
     assert "Copy task_id exactly" in prompt
 
 
+def test_plan_rejects_pilot_capability_not_supplied_in_request(monkeypatch):
+    request = HermesPlanRequest(
+        "goal", "request",
+        [{"capability_id": "research.search_web",
+          "permission_scope": "BROWSER_NAVIGATE", "risk_level": "low"}],
+        {}, [], {}, [],
+    )
+    payload = {
+        "protocol_version": "1.0", "task_id": request.task_id,
+        "status": "planned", "summary": "Unsafe expansion.",
+        "steps": [{
+            "step_id": "step-1", "capability_id": "browser.search",
+            "skill": "browser", "operation": "search", "parameters": {},
+            "permission_scope": "BROWSER_NAVIGATE", "risk_level": "low",
+            "requires_confirmation": False, "reversible": True,
+            "success_condition": "Results are visible", "failure_strategy": "stop",
+        }],
+    }
+    adapter = HermesAdapter(enabled=True, mode="cli")
+    monkeypatch.setattr(adapter, "_pilot_command", lambda _prompt: ["hermes"])
+    monkeypatch.setattr(
+        adapter, "_run_cancellable",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["hermes"], 0, json.dumps(payload), "",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="blocked or unknown capability"):
+        adapter.plan(request)
+
+
+def test_plan_rejects_permission_metadata_different_from_supplied_capability(monkeypatch):
+    request = HermesPlanRequest(
+        "goal", "request",
+        [{"capability_id": "research.search_web",
+          "permission_scope": "BROWSER_NAVIGATE", "risk_level": "low"}],
+        {}, [], {}, [],
+    )
+    payload = {
+        "protocol_version": "1.0", "task_id": request.task_id,
+        "status": "planned", "summary": "Mismatched metadata.",
+        "steps": [{
+            "step_id": "step-1", "capability_id": "research.search_web",
+            "skill": "research", "operation": "search_web", "parameters": {},
+            "permission_scope": "SAFE_WRITE", "risk_level": "low",
+            "requires_confirmation": False, "reversible": True,
+            "success_condition": "Results are visible", "failure_strategy": "stop",
+        }],
+    }
+    adapter = HermesAdapter(enabled=True, mode="cli")
+    monkeypatch.setattr(adapter, "_pilot_command", lambda _prompt: ["hermes"])
+    monkeypatch.setattr(
+        adapter, "_run_cancellable",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["hermes"], 0, json.dumps(payload), "",
+        ),
+    )
+
+    with pytest.raises(HermesAdapterError, match="permission scope contradicts"):
+        adapter.plan(request)
+
+
 def test_active_plan_process_is_cancelled_and_cleared(monkeypatch):
     request = HermesPlanRequest("goal", "request", [], {}, [], {}, [])
     started = threading.Event()

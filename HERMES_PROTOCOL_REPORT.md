@@ -2,6 +2,8 @@
 
 `brain/hermes_protocol.py` defines protocol version 1.0 and validates only JSON plans. It rejects malformed JSON, wrong versions, unknown/blocked capabilities, skill-operation mismatches, missing scopes, unsafe risk metadata, duplicate step ids, over-limit plans, and shell/code text.
 
+The adapter narrows that protocol allowlist again for every request. A returned step is accepted only when its capability ID was present in that exact request, and its permission scope and risk level must match the supplied capability-registry metadata. Being on the broader pilot allowlist is not sufficient.
+
 Returned plans remain data. `brain/hermes_orchestrator.py` creates a JARVIS task in `WAITING_CONFIRMATION`; it does not execute a desktop action. Execution must be implemented through existing trusted JARVIS capability handlers after confirmation and capability validation.
 
 The constrained adapter uses the official `hermes chat --quiet --query`

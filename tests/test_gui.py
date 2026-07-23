@@ -215,3 +215,35 @@ def test_hermes_settings_use_real_cli_mode_and_official_setup(qapp, tmp_path, mo
     assert "OPENED" in dialog.hermes_status.text()
     dialog.close()
     dialog.deleteLater()
+
+
+def test_hermes_settings_probe_runs_off_gui_thread(qapp, tmp_path, monkeypatch):
+    probe_thread = []
+    release = threading.Event()
+
+    def snapshot(_manager):
+        probe_thread.append(threading.current_thread().name)
+        release.wait(1)
+        return {"state": "READY", "detail": "Hermes Agent v0.test"}
+
+    monkeypatch.setattr(SettingsWindow, "_populate_devices", lambda self: None)
+    monkeypatch.setattr(
+        "brain.hermes_runtime_manager.HermesRuntimeManager.snapshot", snapshot,
+    )
+    dialog = SettingsWindow(SettingsStore(tmp_path / "settings.json"))
+    QApplication.processEvents()
+
+    assert dialog._hermes_probe_running is True
+    assert "Checking" in dialog.hermes_status.text()
+    assert probe_thread == ["JARVIS-Hermes-Settings-Probe"]
+
+    release.set()
+    deadline = time.monotonic() + 2
+    while dialog._hermes_probe_running and time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.01)
+
+    assert dialog.hermes_status.text() == "READY: Hermes Agent v0.test"
+    assert dialog.btn_test_hermes.isEnabled()
+    dialog.close()
+    dialog.deleteLater()

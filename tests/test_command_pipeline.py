@@ -290,6 +290,7 @@ def test_recent_folder_followups_resolve_to_owned_resource_sentinel(phrase):
     (
         "Close it", "Close it again", "Close it again, please.",
         "Close that now please", "Would you close that for me?",
+        "Now close it, please.", "And now close it for me.",
     ),
 )
 def test_contextual_close_modifiers_resolve_to_recent_owned_folder(phrase):
@@ -424,6 +425,7 @@ def test_exact_office_product_nouns_keep_flexible_creation_verbs():
         ("Restore the current window", "window.restore"),
         ("Bring it to the front", "window.front"),
         ("Bring it back up", "window.front"),
+        ("Now bring it back, please.", "window.front"),
         ("Focus on this window", "window.focus"),
     ],
 )

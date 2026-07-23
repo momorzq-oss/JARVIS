@@ -420,7 +420,8 @@ def _strip_request_scaffolding(text):
     value = str(text or "").strip()
     value = re.sub(
         r"^(?:(?:hey|okay)\s+jarvis[, ]*|jarvis[, ]*)?"
-        r"(?:(?:please|kindly)\s+|(?:can|could|would|will)\s+you\s+|"
+        r"(?:(?:(?:okay|alright|and(?:\s+(?:then|now))?|then|now)[, ]+)|"
+        r"(?:please|kindly)\s+|(?:can|could|would|will)\s+you\s+|"
         r"i(?:'d| would)?\s+like\s+you\s+to\s+|i\s+(?:need|want)\s+(?:you\s+)?to\s+)*",
         "", value, flags=re.I,
     )

@@ -5,7 +5,9 @@ import time
 
 import pytest
 
-from brain.hermes_adapter import HermesAdapter, HermesAdapterError
+from brain.hermes_adapter import (
+    HermesAdapter, HermesAdapterError, _session_failure_detail,
+)
 from brain.hermes_protocol import HermesPlanRequest
 
 
@@ -70,6 +72,40 @@ def test_adapter_rejects_presentation_only_runtime_mode():
         adapter.configure(
             enabled=True, mode="managed", provider="openrouter", model="model",
         )
+
+
+def test_session_failure_detail_reports_provider_error_without_private_ids(
+    monkeypatch, tmp_path,
+):
+    session_id = "20260723_122947_3428f8"
+    sessions = tmp_path / "hermes" / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / f"request_dump_{session_id}_20260723_123014_721150.json").write_text(
+        json.dumps({
+            "error": {
+                "message": "private-user-id-must-not-appear",
+                "status_code": 429,
+                "body": {
+                    "message": "Provider returned error",
+                    "code": 429,
+                    "metadata": {
+                        "raw": "The selected model is temporarily rate-limited upstream.",
+                        "provider_name": "Example Provider",
+                    },
+                },
+            },
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
+    detail = _session_failure_detail(f"session_id: {session_id}")
+
+    assert detail == (
+        "Hermes provider error 429: The selected model is temporarily "
+        "rate-limited upstream. (upstream: Example Provider)"
+    )
+    assert "private-user-id" not in detail
 
 
 def test_plan_decodes_official_quiet_output_as_utf8(monkeypatch):

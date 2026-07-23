@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -19,6 +20,41 @@ from .hermes_protocol import parse_plan_json
 
 
 class HermesAdapterError(RuntimeError): pass
+
+
+_SESSION_ID = re.compile(r"\b\d{8}_\d{6}_[0-9a-f]{6,}\b", re.I)
+
+
+def _session_failure_detail(output: str) -> str:
+    """Return only safe provider metadata from one exact Hermes session dump."""
+    match = _SESSION_ID.search(str(output or ""))
+    if not match:
+        return ""
+    session_id = match.group(0)
+    sessions = Path(os.environ.get("LOCALAPPDATA", "")) / "hermes" / "sessions"
+    try:
+        dumps = sorted(
+            sessions.glob(f"request_dump_{session_id}_*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        payload = json.loads(dumps[0].read_text(encoding="utf-8"))
+        error = payload.get("error") if isinstance(payload, dict) else None
+        error = error if isinstance(error, dict) else {}
+        body = error.get("body") if isinstance(error.get("body"), dict) else {}
+        metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+        code = error.get("status_code") or error.get("code") or body.get("code")
+        message = metadata.get("raw") or body.get("message") or "Provider request failed"
+        provider = str(metadata.get("provider_name") or "").strip()
+        safe = re.sub(
+            r"(?i)(?:api[_ -]?key|authorization|bearer|user_id)\s*[:=]\s*\S+",
+            "[REDACTED]", str(message),
+        ).strip()[:360]
+        prefix = f"Hermes provider error {code}" if code else "Hermes provider error"
+        suffix = f" (upstream: {provider[:80]})" if provider else ""
+        return f"{prefix}: {safe}{suffix}"
+    except (OSError, ValueError, IndexError, TypeError):
+        return ""
 
 
 def _background_process_kwargs():
@@ -199,6 +235,7 @@ class HermesAdapter:
         )
         result = self._run_cancellable(self._pilot_command(prompt), cwd=str(Config.TEMP_DIR))
         if result.returncode:
-            detail = (result.stderr or result.stdout or "Hermes plan request failed").strip()
+            raw_detail = (result.stderr or result.stdout or "Hermes plan request failed").strip()
+            detail = _session_failure_detail(raw_detail) or raw_detail
             raise HermesAdapterError(detail[:500])
         return parse_plan_json(result.stdout)

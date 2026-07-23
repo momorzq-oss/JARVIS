@@ -39,7 +39,7 @@ Date: 2026-07-20
 - All three JARVIS-owned Office sessions closed safely.
 - Generic Word proposal precedence: `Create a short Word proposal about Jarvis office pipeline validation.` used `office.create_document`, not University Assignment Mode, and saved a 13,846-byte DOCX.
 - University proposal precedence: explicit university/citation wording remains routed to University Assignment Mode.
-- Current complete regression result: 600 collected, 600 passed, 0 failed, 0 skipped.
+- Current complete regression result: 602 collected, 602 passed, 0 failed, 0 skipped.
 
 ## Packaged Validation
 

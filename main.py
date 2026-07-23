@@ -7,6 +7,7 @@ A console window always shows heard text, intent, action and result.
 """
 import argparse
 import random
+import re
 import sys
 import threading
 import time
@@ -400,6 +401,16 @@ def handle_pending(text, ctx):
         if request is None:
             ctx.pending = None
             return True, "The save request is no longer available, sir."
+        if re.match(r"^(?:close|shut|exit|quit)\b", low):
+            if request.stage == "confirm":
+                return True, (
+                    "This document is still unsaved. Say yes to save it at "
+                    f"{request.resolved_path}, or no to cancel the save before closing."
+                )
+            return True, (
+                "This document is still unsaved. Please choose a save location, "
+                "or say cancel before closing it."
+            )
         if request.stage == "location":
             path = request.resolve(text)
             if path is None:

@@ -31,11 +31,18 @@ def select_route(text, ctx, source="typed"):
     intent = fast_lane(cleaned, state)
     pending = getattr(ctx, "pending", None)
     skill = str((intent or {}).get("skill") or "")
+    pending_kind = str((pending or {}).get("kind") or "")
+    close_awaiting_save = (
+        pending_kind == "save_document" and skill == "app.close"
+    )
 
     # Immediate local controls and concrete PC actions remain reachable even
     # while a research/save workflow is pending.
     if intent is not None and (
-        pending is None or skill.startswith(PREEMPT_PENDING_PREFIXES)
+        pending is None or (
+            skill.startswith(PREEMPT_PENDING_PREFIXES)
+            and not close_awaiting_save
+        )
     ):
         route.update(
             route_type="intent", selected_engine="deterministic",
@@ -46,7 +53,7 @@ def select_route(text, ctx, source="typed"):
     if pending is not None:
         route.update(
             route_type="pending", selected_engine="contextual_pending",
-            pending_kind=str(pending.get("kind") or "unknown"),
+            pending_kind=pending_kind or "unknown",
         )
         return route
 

@@ -83,3 +83,32 @@ def test_save_failure_does_not_claim_success(tmp_path):
         assert str(exc) == "save failed"
     else:
         raise AssertionError("save failure was swallowed")
+
+
+def test_close_during_save_confirmation_keeps_document_pending(tmp_path):
+    from types import SimpleNamespace
+
+    from main import handle_pending
+
+    saved = []
+    request = PendingSaveRequest(
+        task_id="task-1",
+        document_type="Word",
+        suggested_filename="Report",
+        suggested_extension=".docx",
+        current_application="Microsoft Word",
+        save_callback=lambda path: saved.append(path),
+    )
+    request.resolved_path = str(tmp_path / "Report.docx")
+    request.stage = "confirm"
+    ctx = SimpleNamespace(
+        pending={"kind": "save_document", "request": request},
+    )
+
+    handled, response = handle_pending("Close Word", ctx)
+
+    assert handled is True
+    assert "still unsaved" in response
+    assert "say yes" in response.lower()
+    assert saved == []
+    assert ctx.pending["request"] is request

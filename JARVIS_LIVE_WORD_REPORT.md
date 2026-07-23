@@ -37,3 +37,6 @@ Command: `Create a short report about renewable energy live in Word.`
 
 No source was invented. The saved document contains the fetched URLs and access metadata.
 
+## 2026-07-23 Pending Save and Close Validation
+
+A fresh short cited solar-energy report completed in live Word mode. `Close Word, please.` during the save confirmation remained in the contextual pending dialogue and did not dispatch `app.close`. `Yes.` saved and verified `.test_tmp\pending close validation.docx` at 17,661 bytes. A subsequent Close Word completed in one second, emptied the JARVIS registry, and preserved the pre-existing user Word and Chrome processes. The complete suite reports 602 collected, 602 passed, 0 failed, and 0 skipped.

@@ -362,6 +362,15 @@ def test_local_command_preempts_research_pending_and_offline_services():
     assert ctx.router.calls == 0
 
 
+def test_close_word_stays_in_unsaved_save_dialogue():
+    ctx = context(pending={"kind": "save_document", "request": object()})
+
+    route = select_route("Close Word", ctx)
+
+    assert route["route_type"] == "pending"
+    assert route["pending_kind"] == "save_document"
+
+
 def test_office_creation_strips_polite_request_scaffolding_consistently():
     spreadsheet = select_route(
         "Please build a monthly budget tracker in Excel.", context()

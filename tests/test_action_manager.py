@@ -167,6 +167,15 @@ def test_redact_sensitive_values(action_manager):
     assert len(redacted_params["body"]) < len(original_params["body"])
 
 
+def test_redact_text_masks_standalone_bearer_authorization():
+    redacted = ActionManager._redact_text(
+        "provider failed with Authorization: Bearer secret-token-value"
+    )
+
+    assert "secret-token-value" not in redacted
+    assert "[REDACTED]" in redacted
+
+
 # --- Test Audit Logging ---
 def test_audit_log_entry(action_manager, tmp_path):
     Config.AUDIT_LOG_FILE = tmp_path / "audit_log.json"

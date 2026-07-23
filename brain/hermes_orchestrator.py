@@ -8,9 +8,18 @@ from .hermes_task_manager import HermesTaskManager
 
 
 class HermesOrchestrator:
-    def __init__(self, task_manager=None, capability_registry=None):
+    def __init__(self, task_manager=None, capability_registry=None, event_callback=None):
         self.tasks = task_manager or HermesTaskManager()
         self.registry = capability_registry
+        self._event_callback = event_callback
+
+    def _event(self, name, **payload):
+        if not callable(self._event_callback):
+            return
+        try:
+            self._event_callback(str(name), payload)
+        except Exception:
+            pass
 
     def eligible_capabilities(self, requested=None):
         """Return only healthy, connected registry records in the pilot set."""
@@ -83,16 +92,25 @@ class HermesOrchestrator:
         plan, task = self.accept_plan(request, payload, task_id=task_id)
         decision = "approved_once" if approved else "denied"
         self.tasks.record_confirmation(task.task_id, decision)
+        self._event("confirmation_decision", task_id=task.task_id, decision=decision)
         if not approved:
-            return plan, self.tasks.cancel(task.task_id), []
+            cancelled = self.tasks.cancel(task.task_id)
+            self._event("task_finished", task_id=task.task_id, status="CANCELLED")
+            return plan, cancelled, []
         self.tasks.transition(task.task_id, "RUNNING")
         results = []
         for step in plan["steps"]:
             if not self.tasks.wait_until_runnable(task.task_id):
-                return plan, self.tasks.get(task.task_id), results
+                current = self.tasks.get(task.task_id)
+                self._event("task_finished", task_id=task.task_id, status="CANCELLED")
+                return plan, current, results
             attempts = 0
             while True:
                 try:
+                    self._event(
+                        "step_started", task_id=task.task_id,
+                        step_id=step["step_id"], capability_id=step["capability_id"],
+                    )
                     outcome = execute_step(dict(step))
                     if not isinstance(outcome, dict) or not isinstance(outcome.get("ok"), bool):
                         raise RuntimeError("trusted executor did not return verified status")
@@ -102,21 +120,32 @@ class HermesOrchestrator:
                 except Exception as exc:
                     current = self.tasks.get(task.task_id)
                     if current is not None and current.cancellation_token:
+                        self._event("task_finished", task_id=task.task_id, status="CANCELLED")
                         return plan, current, results
                     if (step["failure_strategy"] == "retry"
                             and attempts < Config.HERMES_MAX_RETRIES):
                         attempts += 1
                         self.tasks.record_retry(task.task_id, str(exc))
+                        self._event(
+                            "step_retry", task_id=task.task_id,
+                            step_id=step["step_id"], capability_id=step["capability_id"],
+                            attempt=attempts, error=str(exc),
+                        )
                         self.tasks.transition(task.task_id, "RETRYING", error=str(exc))
                         self.tasks.transition(task.task_id, "RUNNING")
                         continue
                     self.tasks.transition(task.task_id, "FAILED", error=str(exc))
+                    self._event(
+                        "task_finished", task_id=task.task_id, status="FAILED",
+                        error=str(exc),
+                    )
                     return plan, self.tasks.get(task.task_id), results
             # Cancellation can win while a bounded trusted operation is in
             # flight. Its late return must not record progress/output or
             # escape as a misleading pipeline error.
             current = self.tasks.get(task.task_id)
             if current is not None and current.cancellation_token:
+                self._event("task_finished", task_id=task.task_id, status="CANCELLED")
                 return plan, current, results
             try:
                 self.tasks.complete_step(
@@ -126,8 +155,15 @@ class HermesOrchestrator:
             except RuntimeError:
                 current = self.tasks.get(task.task_id)
                 if current is not None and current.cancellation_token:
+                    self._event("task_finished", task_id=task.task_id, status="CANCELLED")
                     return plan, current, results
                 raise
             results.append(outcome.get("result"))
+            self._event(
+                "step_completed", task_id=task.task_id,
+                step_id=step["step_id"], capability_id=step["capability_id"],
+                output_files=outcome.get("output_files") or [],
+            )
         self.tasks.transition(task.task_id, "COMPLETED")
+        self._event("task_finished", task_id=task.task_id, status="COMPLETED")
         return plan, self.tasks.get(task.task_id), results

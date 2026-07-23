@@ -217,6 +217,26 @@ def test_shutdown_stops_voice_engine():
     assert fake.running is False
 
 
+def test_shutdown_audits_and_clears_pending_hermes_task(tmp_path, monkeypatch):
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    audit = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(Config, "AUDIT_LOG_FILE", audit)
+    task = ctl.hermes_tasks.create("private goal")
+    ctl.hermes_tasks.transition(task.task_id, "WAITING_CONFIRMATION", steps=1)
+    ctl._hermes_pending_plans[task.task_id] = (object(), {"summary": "private"})
+
+    ctl.shutdown()
+
+    assert ctl.hermes_tasks.get(task.task_id).status == "CANCELLED"
+    assert ctl._hermes_pending_plans == {}
+    raw = audit.read_text(encoding="utf-8")
+    entry = __import__("json").loads(raw)
+    assert entry["event"] == "task_cancelled"
+    assert entry["task_id"] == task.task_id
+    assert entry["source"] == "shutdown"
+    assert "private goal" not in raw
+
+
 def test_speak_uses_speech_service():
     ctx = make_ctx()
     ctl = AssistantController(ctx=ctx, skip_preload=True)
@@ -663,3 +683,64 @@ def test_global_stop_clears_all_retained_hermes_plans():
 
     assert ctl.hermes_tasks.get(task.task_id).status == "CANCELLED"
     assert ctl._hermes_pending_plans == {}
+
+
+def test_hermes_audit_is_metadata_only_and_redacts_secrets(tmp_path, monkeypatch):
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    audit = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(Config, "AUDIT_LOG_FILE", audit)
+
+    ctl._audit_hermes_event(
+        "test_event",
+        task_id="task-safe", api_key="fake",
+        content="private prompt body", error="Bearer secret-token-value",
+    )
+
+    raw = audit.read_text(encoding="utf-8")
+    entry = __import__("json").loads(raw)
+    assert entry["event_type"] == "hermes"
+    assert entry["event"] == "test_event"
+    assert entry["api_key"] == "[REDACTED]"
+    assert entry["content"] == "[REDACTED CONTENT]"
+    assert "secret-token-value" not in raw
+
+
+def test_plan_audit_links_task_hash_and_capabilities_without_goal(tmp_path, monkeypatch):
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    audit = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(Config, "AUDIT_LOG_FILE", audit)
+    private_goal = "confidential renewable acquisition topic"
+    record = type("Record", (), {
+        "capability_id": "research.search_web", "status": "WORKING",
+        "connected": True, "permission": "BROWSER_NAVIGATE", "risk": "low",
+    })()
+    ctl.capability_registry = type("Registry", (), {
+        "snapshot": lambda self: [record],
+    })()
+    ctl.hermes_orchestrator.registry = ctl.capability_registry
+    ctl.hermes_adapter.enabled = True
+    ctl.hermes_adapter.mode = "cli"
+    ctl.hermes_adapter.plan = lambda request: {
+        "protocol_version": "1.0", "task_id": request.task_id,
+        "status": "planned", "summary": "Safe public search",
+        "steps": [{
+            "step_id": "step-1", "capability_id": "research.search_web",
+            "skill": "research", "operation": "search_web",
+            "parameters": {"query": private_goal},
+            "permission_scope": "BROWSER_NAVIGATE", "risk_level": "low",
+            "requires_confirmation": False, "reversible": True,
+            "success_condition": "results", "failure_strategy": "stop",
+        }],
+    }
+
+    _request, _plan, task = ctl.plan_hermes_task(private_goal, private_goal)
+
+    raw = audit.read_text(encoding="utf-8")
+    entries = [__import__("json").loads(line) for line in raw.splitlines()]
+    assert private_goal not in raw
+    assert [entry["event"] for entry in entries] == [
+        "task_received", "plan_accepted",
+    ]
+    assert all(entry["task_id"] == task.task_id for entry in entries)
+    assert len(entries[1]["plan_hash"]) == 64
+    assert entries[1]["capabilities_requested"] == ["research.search_web"]

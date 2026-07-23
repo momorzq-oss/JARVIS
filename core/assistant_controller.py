@@ -8,6 +8,8 @@ and opens the real microphone, loads the wake-word model and runs the live
 pipeline on instance-held threads/services - nothing is garbage-collected
 mid-session. No Qt types live here, so it stays testable headlessly.
 """
+import hashlib
+import json
 import threading
 import time
 from pathlib import Path
@@ -49,6 +51,7 @@ class AssistantController:
         self.skip_preload = skip_preload
         self._callbacks = {}
         self._lock = threading.RLock()
+        self._audit_lock = threading.Lock()
         self._shutdown_event = threading.Event()
         self._state = STATE_IDLE
         self._last_command = ""
@@ -91,6 +94,7 @@ class AssistantController:
         self.hermes_tasks = HermesTaskManager()
         self.hermes_orchestrator = HermesOrchestrator(
             self.hermes_tasks, self.capability_registry,
+            event_callback=self._audit_hermes_event,
         )
         self._hermes_pending_plans = {}
         self.account_connections = AccountConnectionManager(self.ctx)
@@ -114,6 +118,34 @@ class AssistantController:
 
     def _log(self, tag, msg):
         self._emit("log", tag, msg)
+
+    def _audit_hermes_event(self, event, payload=None, **fields):
+        """Append metadata-only Hermes evidence to the existing audit log."""
+        data = dict(payload or {})
+        data.update(fields)
+        entry = {
+            "timestamp": time.time(),
+            "event_type": "hermes",
+            "event": str(event),
+            "provider": str(getattr(self.hermes_adapter, "provider", "") or ""),
+            "model": str(getattr(self.hermes_adapter, "model", "") or ""),
+            **data,
+        }
+        safe = self.action_manager._redact_sensitive_values(entry)
+        try:
+            with self._audit_lock:
+                Config.AUDIT_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+                with Config.AUDIT_LOG_FILE.open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(safe, ensure_ascii=False) + "\n")
+        except Exception as exc:
+            audio_log.log_error(f"Failed to write Hermes audit event: {exc}")
+
+    @staticmethod
+    def _hermes_plan_hash(plan):
+        encoded = json.dumps(
+            plan, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     def _set_state(self, state, detail=""):
         with self._lock:
@@ -350,6 +382,23 @@ class AssistantController:
             raise RuntimeError("No healthy pilot capabilities are available")
         task = self.hermes_tasks.create(request.goal)
         self.hermes_tasks.transition(task.task_id, "PLANNING")
+        allowed_ids = [
+            str(item.get("capability_id") or "")
+            for item in request.available_capabilities
+            if item.get("capability_id")
+        ]
+        explicitly_requested = [
+            str(item.get("capability_id") or item.get("id") or "")
+            for item in (capabilities or []) if isinstance(item, dict)
+        ]
+        requested_ids = explicitly_requested or allowed_ids
+        self._audit_hermes_event(
+            "task_received", task_id=task.task_id,
+            goal_length=len(str(goal)), request_length=len(str(user_request)),
+            capabilities_requested=requested_ids,
+            capabilities_allowed=allowed_ids,
+            capabilities_rejected=sorted(set(requested_ids) - set(allowed_ids)),
+        )
         try:
             payload = self.hermes_adapter.plan(request)
             plan, task = self.hermes_orchestrator.accept_plan(
@@ -360,6 +409,15 @@ class AssistantController:
                 if current is None or current.cancellation_token:
                     raise HermesAdapterError("request cancelled")
                 self._hermes_pending_plans[task.task_id] = (request, plan)
+            self._audit_hermes_event(
+                "plan_accepted", task_id=task.task_id,
+                plan_hash=self._hermes_plan_hash(plan),
+                step_count=len(plan.get("steps", [])),
+                capabilities_requested=[
+                    str(step.get("capability_id") or "")
+                    for step in plan.get("steps", [])
+                ],
+            )
         except Exception as exc:
             current = self.hermes_tasks.get(task.task_id)
             # A pre-emptive GUI/voice cancellation terminates the owned CLI
@@ -367,6 +425,11 @@ class AssistantController:
             # must not rewrite the already-terminal CANCELLED state as FAILED.
             if current is None or not current.cancellation_token:
                 self.hermes_tasks.transition(task.task_id, "FAILED", error=str(exc))
+            self._audit_hermes_event(
+                "planning_failed", task_id=task.task_id,
+                status="CANCELLED" if current and current.cancellation_token else "FAILED",
+                error=str(exc),
+            )
             raise
         self._emit("status", self.status_snapshot())
         return request, plan, task
@@ -520,6 +583,9 @@ class AssistantController:
             if len(goal) > 4000:
                 return "That Hermes goal is too long. Please keep it under 4,000 characters."
             if not self.hermes_adapter.enabled or self.hermes_adapter.mode != "cli":
+                self._audit_hermes_event(
+                    "planning_skipped", status="DISABLED", goal_length=len(goal),
+                )
                 return (
                     "Hermes planning is disabled. Enable the external Hermes engine "
                     "in Settings after its provider is configured. Normal JARVIS commands remain available."
@@ -589,6 +655,10 @@ class AssistantController:
             with self._lock:
                 updated = self.hermes_tasks.cancel(task.task_id)
                 self._hermes_pending_plans.pop(task.task_id, None)
+            self._audit_hermes_event(
+                "task_cancelled", task_id=task.task_id,
+                prior_status=task.status, source="user_command",
+            )
             self._emit("status", self.status_snapshot())
             return f"Hermes task {updated.task_id} was cancelled."
         return "That Hermes command is not registered."
@@ -821,6 +891,10 @@ class AssistantController:
                 live_task.cancel()
         except Exception:
             pass
+        active_hermes = [
+            task for task in self.hermes_tasks.list()
+            if task.status not in {"COMPLETED", "FAILED", "CANCELLED"}
+        ]
         try:
             self.hermes_adapter.cancel()
         except Exception:
@@ -831,6 +905,11 @@ class AssistantController:
             pass
         with self._lock:
             self._hermes_pending_plans.clear()
+        for task in active_hermes:
+            self._audit_hermes_event(
+                "task_cancelled", task_id=task.task_id,
+                prior_status=task.status, source="global_stop",
+            )
         self._emit("agentstatus", "Cancelled", "stopped by user")
         return True
 
@@ -848,6 +927,10 @@ class AssistantController:
     def shutdown(self):
         audio_log.log("Controller shutdown requested")
         self._shutdown_event.set()
+        active_hermes = [
+            task for task in self.hermes_tasks.list()
+            if task.status not in {"COMPLETED", "FAILED", "CANCELLED"}
+        ]
         try:
             self.hermes_adapter.cancel()
         except Exception:
@@ -858,6 +941,11 @@ class AssistantController:
             pass
         with self._lock:
             self._hermes_pending_plans.clear()
+        for task in active_hermes:
+            self._audit_hermes_event(
+                "task_cancelled", task_id=task.task_id,
+                prior_status=task.status, source="shutdown",
+            )
         try:
             with self._lock:
                 engine = self.voice_engine

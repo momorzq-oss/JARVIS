@@ -209,3 +209,26 @@ def test_cancelled_failed_step_does_not_retry_or_overwrite_terminal_state():
     assert task.status == "CANCELLED"
     assert task.retries == 0
     assert results == []
+
+
+def test_orchestrator_emits_linked_metadata_events_without_step_parameters():
+    events = []
+    orchestrator = HermesOrchestrator(
+        capability_registry=_browser_registry(),
+        event_callback=lambda name, payload: events.append((name, payload)),
+    )
+    request = orchestrator.prepare_request("private goal", "private request")
+    payload = _one_step_plan(request)
+
+    orchestrator.run_approved_plan(
+        request, payload,
+        lambda _step: {"ok": True, "result": "private result"},
+        approved=True,
+    )
+
+    assert [name for name, _payload in events] == [
+        "confirmation_decision", "step_started", "step_completed", "task_finished",
+    ]
+    assert all("parameters" not in data for _name, data in events)
+    assert all("result" not in data for _name, data in events)
+    assert events[-1][1]["status"] == "COMPLETED"

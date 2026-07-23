@@ -241,6 +241,10 @@ class ActionManager:
             r"***@\1", text, flags=re.I,
         )
         text = re.sub(r"\b(?:sk-or-v1-|sk-)[A-Za-z0-9_-]{8,}\b", "[REDACTED]", text)
+        text = re.sub(
+            r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}\b",
+            "[REDACTED]", text,
+        )
         text = re.sub(r"(?i)\b(?:bearer|token|password|secret)\s*[:=]\s*\S+", "[REDACTED]", text)
         return text
 

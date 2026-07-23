@@ -335,6 +335,8 @@ def _verify_launched_app(target, existing_hwnds, existing_pids, timeout=7.0):
         if len(word) > 2 and word not in {"microsoft", "google", "application"}
     }
     deadline = time.time() + max(0.1, float(timeout))
+    hosted_frame_grace_deadline = None
+    fallback_candidate = None
     while time.time() < deadline:
         matching_pids = _matching_process_ids(executable)
         new_process_ids = matching_pids.difference(existing_pids)
@@ -347,6 +349,10 @@ def _verify_launched_app(target, existing_hwnds, existing_pids, timeout=7.0):
                 continue
             host_pid = _window_pid(hwnd)
             pid = _effective_window_pid(hwnd, host_pid)
+            hosted_frame = (
+                _native_process_name(host_pid).lower() == "applicationframehost.exe"
+                and pid != host_pid
+            )
             # A Store frame becomes visible slightly before its real app
             # CoreWindow is attached. Keep polling rather than recording the
             # shared host as the application owner.
@@ -358,14 +364,32 @@ def _verify_launched_app(target, existing_hwnds, existing_pids, timeout=7.0):
                 word in title_low for word in target_words
             )
             if title_matches or pid in new_process_ids:
-                candidates.append((pid, int(hwnd), title))
+                candidates.append((pid, int(hwnd), title, hosted_frame))
         if candidates:
             # Prefer a window owned by a newly observed real process.  A title
             # match remains valid when the app reuses an existing process.
-            candidates.sort(key=lambda item: item[0] not in new_process_ids)
-            return candidates[0]
+            # Store apps expose both an internal CoreWindow and the visible
+            # ApplicationFrameHost. Keep the real child PID for ownership but
+            # retain the host-frame HWND that actually responds to window
+            # state commands.
+            candidates.sort(key=lambda item: (
+                item[0] not in new_process_ids,
+                not item[3],
+            ))
+            pid, hwnd, title, hosted_frame = candidates[0]
+            if not hosted_frame:
+                actual_process = _native_process_name(pid).lower()
+                if actual_process and executable and actual_process != executable:
+                    fallback_candidate = (pid, hwnd, title)
+                    now = time.time()
+                    if hosted_frame_grace_deadline is None:
+                        hosted_frame_grace_deadline = min(deadline, now + 1.0)
+                    if now < hosted_frame_grace_deadline:
+                        time.sleep(0.05)
+                        continue
+            return pid, hwnd, title
         time.sleep(0.1)
-    return None
+    return fallback_candidate
 
 
 def _find_new_folder_window(path, existing_hwnds, timeout=10.0):

@@ -137,6 +137,34 @@ def test_application_window_verification_uses_hosted_app_pid(monkeypatch):
     )
 
 
+def test_application_window_verification_prefers_host_frame_hwnd(monkeypatch):
+    internal = SimpleNamespace(title="Calculator", _hWnd=1001)
+    frame = SimpleNamespace(title="Calculator", _hWnd=1002)
+    discoveries = iter(([internal], [internal, frame]))
+    monkeypatch.setattr(
+        "pygetwindow.getAllWindows",
+        lambda: next(discoveries, [internal, frame]),
+    )
+    monkeypatch.setattr(system_control, "_matching_process_ids", lambda _value: {31})
+    monkeypatch.setattr(
+        system_control, "_window_pid", lambda hwnd: {1001: 31, 1002: 30}[hwnd],
+    )
+    monkeypatch.setattr(
+        system_control, "_effective_window_pid", lambda _hwnd, _pid: 31,
+    )
+    monkeypatch.setattr(
+        system_control, "_native_process_name",
+        lambda pid: "ApplicationFrameHost.exe" if pid == 30 else "CalculatorApp.exe",
+    )
+    monkeypatch.setattr(system_control, "_native_window_visible", lambda _hwnd: True)
+
+    target = SimpleNamespace(value="calc.exe", name="Calculator")
+
+    assert system_control._verify_launched_app(target, set(), set(), timeout=0.1) == (
+        31, 1002, "Calculator",
+    )
+
+
 def test_unverified_application_launch_is_not_registered(monkeypatch):
     registrations = []
     target = SimpleNamespace(kind="app", value="missing.exe", name="Missing")

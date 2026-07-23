@@ -284,8 +284,16 @@ class GuiController(QObject):
 
         # Block worker thread until GUI/voice handles confirmation.
         timeout_seconds = max(0.001, self.confirmation_timeout_ms / 1000.0)
-        if not self._confirmation_response.wait(timeout=timeout_seconds):
+        # The dialog's Qt timer owns the visible response deadline.  Give the
+        # GUI thread a bounded delivery grace so a busy event loop can publish
+        # that timeout decision before the worker abandons the request and
+        # leaves an orphaned dialog on screen.
+        response_delivery_grace_seconds = 1.0
+        if not self._confirmation_response.wait(
+            timeout=timeout_seconds + response_delivery_grace_seconds
+        ):
             self._confirmation_pending.clear()
+            self._confirmation_decision = "timeout"
             return "timeout"
         return self._confirmation_decision
 

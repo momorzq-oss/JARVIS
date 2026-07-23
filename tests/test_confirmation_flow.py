@@ -134,6 +134,25 @@ def test_gui_scheduling_delay_does_not_consume_user_response_time(
     assert executed == [True]
 
 
+def test_visible_dialog_timeout_is_owned_by_gui_timer(qapp, confirmation_env):
+    controller, gui = confirmation_env
+    gui.confirmation_timeout_ms = 50
+    observed = []
+
+    def briefly_block_gui(dialog, thread, _executed):
+        assert dialog.isVisible()
+        time.sleep(0.15)
+        observed.append(thread.is_alive())
+
+    result, executed = _run_confirmation(
+        qapp, controller, gui, briefly_block_gui,
+    )
+
+    assert observed == [True]
+    assert result == "Action denied because confirmation timed out."
+    assert executed == []
+
+
 def test_deny_keeps_action_from_running(qapp, confirmation_env):
     controller, gui = confirmation_env
     result, executed = _run_confirmation(

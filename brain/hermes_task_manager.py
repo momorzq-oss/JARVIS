@@ -41,6 +41,17 @@ class HermesTaskManager:
         self._lock = threading.RLock()
         self._changed = threading.Condition(self._lock)
 
+    @staticmethod
+    def _snapshot(task: HermesTask) -> HermesTask:
+        """Return a detached task value safe for callers to mutate."""
+        return dataclasses.replace(
+            task,
+            capabilities_used=list(task.capabilities_used),
+            permissions=list(task.permissions),
+            confirmations=list(task.confirmations),
+            output_files=list(task.output_files),
+        )
+
     def create(self, goal: str, owner="user") -> HermesTask:
         with self._lock:
             active = sum(t.status in {"QUEUED", "PLANNING", "WAITING_CONFIRMATION", "RUNNING", "PAUSED", "RETRYING"}
@@ -50,16 +61,16 @@ class HermesTaskManager:
             task = HermesTask(task_id=str(uuid.uuid4()), goal=str(goal), owner=owner)
             self._tasks[task.task_id] = task
             self._changed.notify_all()
-            return dataclasses.replace(task)
+            return self._snapshot(task)
 
     def get(self, task_id: str) -> HermesTask | None:
         with self._lock:
             task = self._tasks.get(task_id)
-            return dataclasses.replace(task) if task else None
+            return self._snapshot(task) if task else None
 
     def list(self) -> list[HermesTask]:
         with self._lock:
-            return [dataclasses.replace(task) for task in self._tasks.values()]
+            return [self._snapshot(task) for task in self._tasks.values()]
 
     def transition(self, task_id: str, status: str, *, error="", steps=None) -> HermesTask:
         if status not in TASK_STATUSES:
@@ -78,7 +89,7 @@ class HermesTaskManager:
             if steps is not None:
                 task.total_steps = int(steps)
             self._changed.notify_all()
-            return dataclasses.replace(task)
+            return self._snapshot(task)
 
     def pause(self, task_id): return self.transition(task_id, "PAUSED")
     def resume(self, task_id): return self.transition(task_id, "RUNNING")
@@ -95,7 +106,7 @@ class HermesTaskManager:
             task.confirmations.append(str(decision))
             task.updated_at = time.time()
             self._changed.notify_all()
-            return dataclasses.replace(task)
+            return self._snapshot(task)
 
     def record_retry(self, task_id: str, error: str) -> HermesTask:
         with self._lock:
@@ -104,7 +115,7 @@ class HermesTaskManager:
             task.last_error = str(error)
             task.updated_at = time.time()
             self._changed.notify_all()
-            return dataclasses.replace(task)
+            return self._snapshot(task)
 
     def complete_step(self, task_id: str, capability_id: str, permission: str,
                       output_files=None) -> HermesTask:
@@ -126,7 +137,7 @@ class HermesTaskManager:
                     task.output_files.append(value)
             task.updated_at = time.time()
             self._changed.notify_all()
-            return dataclasses.replace(task)
+            return self._snapshot(task)
 
     def wait_until_runnable(self, task_id: str, timeout=None) -> bool:
         deadline = None if timeout is None else time.monotonic() + max(0, float(timeout))

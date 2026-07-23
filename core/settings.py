@@ -90,9 +90,20 @@ class SettingsStore:
                             migrated = True
                         if merged.get("hermes_learning_enabled") is not False:
                             migrated = True
+                        if merged.get("hermes_approval_mode") != "strict":
+                            migrated = True
+                        try:
+                            concurrency = int(merged.get("hermes_concurrency_limit", 2))
+                        except (TypeError, ValueError):
+                            concurrency = 2
+                        concurrency = max(1, min(2, concurrency))
+                        if merged.get("hermes_concurrency_limit") != concurrency:
+                            migrated = True
                         merged["hermes_background_enabled"] = False
                         merged["hermes_schedules_enabled"] = False
                         merged["hermes_learning_enabled"] = False
+                        merged["hermes_approval_mode"] = "strict"
+                        merged["hermes_concurrency_limit"] = concurrency
                         self._data = merged
                         if migrated:
                             self.save()

@@ -33,3 +33,20 @@ def test_plan_rejects_wrong_protocol():
     payload["protocol_version"] = "2.0"
     with pytest.raises(HermesProtocolError, match="protocol"):
         validate_plan(payload)
+
+
+def test_plan_rejects_empty_steps():
+    payload = _plan()
+    payload["steps"] = []
+
+    with pytest.raises(HermesProtocolError, match="number of steps"):
+        validate_plan(payload)
+
+
+def test_request_policy_defaults_keep_autonomy_disabled():
+    request = HermesPlanRequest("goal", "request", [], {}, [], {}, [])
+    policy = request.to_dict()["execution_policy"]
+
+    assert policy["background_allowed"] is False
+    assert policy["schedule_allowed"] is False
+    assert policy["learning_allowed"] is False

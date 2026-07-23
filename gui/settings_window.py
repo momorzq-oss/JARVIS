@@ -222,8 +222,12 @@ class SettingsWindow(QDialog):
         self._add_combo(form, "hermes_provider", "Provider", ["openrouter", "openai", "anthropic", "custom"])
         self._add_line(form, "hermes_model", "Agent model")
         self._add_combo(form, "hermes_mode", "Runtime mode", ["disabled", "cli"])
-        self._add_spin(form, "hermes_concurrency_limit", "Concurrent tasks", 1, 4, 1)
-        self._add_combo(form, "hermes_approval_mode", "Approval mode", ["strict", "balanced", "trusted_session"])
+        self._add_spin(form, "hermes_concurrency_limit", "Concurrent tasks", 1, 2, 1)
+        self._add_combo(form, "hermes_approval_mode", "Approval mode", ["strict"])
+        self._widgets["hermes_approval_mode"][1].setEnabled(False)
+        self._widgets["hermes_approval_mode"][1].setToolTip(
+            "Strict approval is required until the constrained pilot passes."
+        )
         self._add_check(form, "hermes_background_enabled", "Enable background tasks")
         self._add_check(form, "hermes_schedules_enabled", "Enable schedules")
         self._add_check(form, "hermes_learning_enabled", "Enable generated-skill proposals")

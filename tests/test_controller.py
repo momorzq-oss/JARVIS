@@ -18,6 +18,12 @@ from config import Config
 from voice.speech_service import SpeechOutputService # Import real SpeechOutputService
 
 
+@pytest.fixture(autouse=True)
+def isolate_controller_audit_log(tmp_path, monkeypatch):
+    """Controller tests must never append synthetic events to the live audit."""
+    monkeypatch.setattr(Config, "AUDIT_LOG_FILE", tmp_path / "controller-audit.jsonl")
+
+
 class FakeSpeaker:
     speaking = False
     last_engine = "piper"
@@ -377,6 +383,78 @@ def test_apply_settings_reconfigures_live_hermes_adapter_safely(monkeypatch):
     assert Config.HERMES_BACKGROUND_TASKS_ENABLED is False
     assert Config.HERMES_SCHEDULING_ENABLED is False
     assert Config.HERMES_LEARNING_ENABLED is False
+
+
+def test_apply_settings_clamps_hermes_concurrency_to_two(monkeypatch):
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    values = {
+        "speaker_device": "default", "hermes_enabled": False,
+        "hermes_mode": "disabled", "hermes_provider": "openrouter",
+        "hermes_model": "openai/gpt-oss-safeguard-20b",
+        "hermes_concurrency_limit": 4,
+    }
+    ctl._settings = type(
+        "Store", (), {"get": lambda self, key, default=None: values.get(key, default)},
+    )()
+    ctl.speech.set_output_device = lambda _device: True
+    monkeypatch.setattr(ctl, "status_snapshot", lambda: {})
+
+    assert ctl.apply_settings() is True
+    assert ctl.hermes_tasks.max_concurrent == 2
+    assert Config.HERMES_MAX_CONCURRENT_TASKS == 2
+
+
+def test_background_request_is_review_only_and_third_task_is_rejected():
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    ctl.hermes_tasks.max_concurrent = 2
+    record = type("Record", (), {
+        "capability_id": "research.search_web", "status": "WORKING",
+        "connected": True, "permission": "BROWSER_NAVIGATE", "risk": "low",
+    })()
+    ctl.capability_registry = type("Registry", (), {
+        "snapshot": lambda self: [record],
+    })()
+    ctl.hermes_orchestrator.registry = ctl.capability_registry
+    ctl.hermes_adapter.enabled = True
+    ctl.hermes_adapter.mode = "cli"
+    requests = []
+
+    def plan(request):
+        requests.append(request)
+        return {
+            "protocol_version": "1.0", "task_id": request.task_id,
+            "status": "planned", "summary": "Review public sources",
+            "steps": [{
+                "step_id": "step-1", "capability_id": "research.search_web",
+                "skill": "research", "operation": "search_web",
+                "parameters": {"query": "public energy"},
+                "permission_scope": "BROWSER_NAVIGATE", "risk_level": "low",
+                "requires_confirmation": False, "reversible": True,
+                "success_condition": "results", "failure_strategy": "stop",
+            }],
+        }
+
+    ctl.hermes_adapter.plan = plan
+
+    background = ctl.handle_hermes_intent(
+        "hermes.plan", {"goal": "first", "background_requested": True},
+    )
+    foreground = ctl.handle_hermes_intent(
+        "hermes.plan", {"goal": "second", "background_requested": False},
+    )
+    rejected = ctl.handle_hermes_intent(
+        "hermes.plan", {"goal": "third", "background_requested": False},
+    )
+
+    assert "reviewable plan only" in background
+    assert "nothing has executed" in background
+    assert "waiting for JARVIS approval" in foreground
+    assert "concurrency limit" in rejected
+    assert len(requests) == 2
+    assert requests[0].to_dict()["execution_policy"]["background_allowed"] is False
+    assert [task.status for task in ctl.hermes_tasks.list()] == [
+        "WAITING_CONFIRMATION", "WAITING_CONFIRMATION",
+    ]
 
 
 def test_hermes_planning_failure_is_retained_as_failed_task():

@@ -208,6 +208,10 @@ def test_hermes_settings_use_real_cli_mode_and_official_setup(qapp, tmp_path, mo
     assert not dialog._widgets["hermes_background_enabled"][1].isEnabled()
     assert not dialog._widgets["hermes_schedules_enabled"][1].isEnabled()
     assert not dialog._widgets["hermes_learning_enabled"][1].isEnabled()
+    approval = dialog._widgets["hermes_approval_mode"][1]
+    assert [approval.itemText(index) for index in range(approval.count())] == ["strict"]
+    assert not approval.isEnabled()
+    assert dialog._widgets["hermes_concurrency_limit"][1].maximum() == 2
 
     dialog.btn_configure_hermes.click()
     assert launched == [True]

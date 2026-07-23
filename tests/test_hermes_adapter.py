@@ -11,6 +11,30 @@ from brain.hermes_adapter import (
 from brain.hermes_protocol import HermesPlanRequest
 
 
+def _valid_safe_plan_fixture():
+    request = HermesPlanRequest(
+        "goal", "request",
+        [{
+            "capability_id": "research.search_web",
+            "permission_scope": "BROWSER_NAVIGATE", "risk_level": "low",
+        }],
+        {}, [], {}, [],
+    )
+    payload = {
+        "protocol_version": "1.0", "task_id": request.task_id,
+        "status": "planned", "summary": "Safe plan.",
+        "steps": [{
+            "step_id": "step-1", "capability_id": "research.search_web",
+            "skill": "research", "operation": "search_web",
+            "parameters": {"query": "public topic"},
+            "permission_scope": "BROWSER_NAVIGATE", "risk_level": "low",
+            "requires_confirmation": False, "reversible": True,
+            "success_condition": "results", "failure_strategy": "stop",
+        }],
+    }
+    return request, payload
+
+
 def test_disabled_adapter_does_not_run_process():
     with pytest.raises(HermesAdapterError, match="disabled"):
         HermesAdapter(enabled=False).diagnostic()
@@ -109,11 +133,7 @@ def test_session_failure_detail_reports_provider_error_without_private_ids(
 
 
 def test_plan_decodes_official_quiet_output_as_utf8(monkeypatch):
-    request = HermesPlanRequest("goal", "request", [], {}, [], {}, [])
-    payload = {
-        "protocol_version": "1.0", "task_id": request.task_id,
-        "status": "planned", "summary": "Safe plan.", "steps": [],
-    }
+    request, payload = _valid_safe_plan_fixture()
     observed = {}
 
     class Process:
@@ -140,11 +160,7 @@ def test_plan_decodes_official_quiet_output_as_utf8(monkeypatch):
 
 
 def test_plan_prompt_contains_the_exact_response_contract(monkeypatch):
-    request = HermesPlanRequest("goal", "request", [], {}, [], {}, [])
-    payload = {
-        "protocol_version": "1.0", "task_id": request.task_id,
-        "status": "planned", "summary": "Safe plan.", "steps": [],
-    }
+    request, payload = _valid_safe_plan_fixture()
     observed = {}
 
     class Process:

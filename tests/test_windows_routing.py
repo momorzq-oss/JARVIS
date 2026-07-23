@@ -3,6 +3,7 @@ import pytest
 from brain.router import fast_lane
 from core.action_manager import Action, ActionManager
 from core.planner import plan_command
+from config import Config
 from skills.windows_targets import resolve_windows_target
 
 
@@ -99,7 +100,8 @@ def test_fast_mode_keeps_existing_research_plan():
     assert "execution_mode" not in plan[0]["params"]
 
 
-def test_raw_shell_action_is_rejected():
+def test_raw_shell_action_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(Config, "AUDIT_LOG_FILE", tmp_path / "audit.jsonl")
     controller = type("Controller", (), {})()
     manager = ActionManager(controller)
     action = Action("shell", "shell", "execute", {"command": "rm -rf /"})

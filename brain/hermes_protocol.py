@@ -76,7 +76,8 @@ def validate_plan(payload: Any, allowed_capabilities=PILOT_CAPABILITIES) -> dict
         raise HermesProtocolError("unsupported protocol version")
     if payload["status"] != "planned" or not isinstance(payload["summary"], str):
         raise HermesProtocolError("plan must have planned status and text summary")
-    if not isinstance(payload["steps"], list) or len(payload["steps"]) > Config.HERMES_MAX_STEPS:
+    if (not isinstance(payload["steps"], list) or not payload["steps"]
+            or len(payload["steps"]) > Config.HERMES_MAX_STEPS):
         raise HermesProtocolError("invalid number of steps")
     ids = set()
     clean_steps = []

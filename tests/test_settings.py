@@ -47,6 +47,8 @@ def test_hermes_defaults_match_supported_safe_runtime_modes():
     assert DEFAULTS["hermes_background_enabled"] is False
     assert DEFAULTS["hermes_schedules_enabled"] is False
     assert DEFAULTS["hermes_learning_enabled"] is False
+    assert DEFAULTS["hermes_approval_mode"] == "strict"
+    assert DEFAULTS["hermes_concurrency_limit"] == 2
 
 
 def test_legacy_managed_hermes_settings_are_repaired_to_disabled(tmp_path):
@@ -62,6 +64,25 @@ def test_legacy_managed_hermes_settings_are_repaired_to_disabled(tmp_path):
     assert store.get("hermes_enabled") is False
     assert store.get("hermes_mode") == "disabled"
     assert store.get("hermes_background_enabled") is False
+
+
+def test_unsafe_hermes_approval_and_concurrency_settings_are_repaired(tmp_path):
+    import json
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        '{"hermes_approval_mode":"trusted_session",'
+        '"hermes_concurrency_limit":4}',
+        encoding="utf-8",
+    )
+
+    store = SettingsStore(path)
+
+    assert store.get("hermes_approval_mode") == "strict"
+    assert store.get("hermes_concurrency_limit") == 2
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["hermes_approval_mode"] == "strict"
+    assert saved["hermes_concurrency_limit"] == 2
 
 
 def test_legacy_hermes_model_is_migrated_and_persisted(tmp_path):

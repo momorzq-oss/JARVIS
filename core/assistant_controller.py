@@ -174,7 +174,7 @@ class AssistantController:
             enabled = bool(self._settings.get("hermes_enabled", False)) and mode == "cli"
             provider = str(self._settings.get("hermes_provider", "openrouter") or "").strip()
             model = str(self._settings.get("hermes_model", "") or "").strip()
-            concurrency = max(1, min(4, int(self._settings.get("hermes_concurrency_limit", 2))))
+            concurrency = max(1, min(2, int(self._settings.get("hermes_concurrency_limit", 2))))
             self.hermes_adapter.configure(
                 enabled=enabled, mode=mode, provider=provider, model=model,
                 timeout=Config.HERMES_TIMEOUT_SECONDS,
@@ -599,7 +599,10 @@ class AssistantController:
                 dict.fromkeys(step["capability_id"] for step in plan["steps"])
             ) or "none"
             summary = str(plan.get("summary") or "Plan prepared").strip()[:500]
-            background_note = " Background execution remains disabled." if (
+            background_note = (
+                " Background execution remains disabled; this is a reviewable plan "
+                "only, and APPROVE ONCE runs it interactively."
+            ) if (
                 params.get("background_requested")
                 and not Config.HERMES_BACKGROUND_TASKS_ENABLED
             ) else ""

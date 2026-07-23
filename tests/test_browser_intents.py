@@ -22,6 +22,7 @@ from core.automation_intents import classify_browser_intent
     ("Look on YouTube for building a local LLM", "browser.search_youtube", "building a local LLM", "youtube"),
     ("Find a video explaining local language models", "browser.search_youtube", "local language models", "youtube"),
     ("Play an educational video about dancing", "browser.search_youtube_and_play", "dancing", "youtube"),
+    ("Find me a YouTube tutorial that teaches Python decorators and play the best result", "browser.search_youtube_and_play", "Python decorators", "youtube"),
     ("Show me the best tutorial for running an LLM locally", "browser.search_youtube", "running an LLM locally", "youtube"),
     ("Open a new tab and search for quantum computing", "web.search", "quantum computing", "google"),
 ])

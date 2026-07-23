@@ -76,7 +76,8 @@ BROWSER_ALIASES = {
 _BROWSER_FILLER = re.compile(
     r"\b(?:please|for me|can you|could you|would you|i want to|i need to|"
     r"can you get|let me|something|a good|the best|most relevant|useful|"
-    r"information|me|about|on|for|to|of|with|explaining|explain|show me|look up)\b",
+    r"information|me|about|on|for|to|of|with|explaining|explain|"
+    r"that teaches|which teaches|teaching|teaches|show me|look up)\b",
     re.I,
 )
 _BROWSER_STOP_WORDS = {

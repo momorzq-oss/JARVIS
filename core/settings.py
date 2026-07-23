@@ -26,13 +26,13 @@ DEFAULTS = {
     "live_typing_speed": 0.02,
     "default_save_behavior": "ask",
     "confirmation_policy": "risk_based",
-    "hermes_enabled": False,
-    "hermes_provider": "openrouter",
-    "hermes_model": "",
-    "hermes_mode": "managed",
-    "hermes_concurrency_limit": 2,
-    "hermes_approval_mode": "balanced",
-    "hermes_background_enabled": True,
+    "hermes_enabled": Config.HERMES_ENABLED,
+    "hermes_provider": Config.HERMES_PROVIDER,
+    "hermes_model": Config.HERMES_MODEL or Config.OPENROUTER_MODEL,
+    "hermes_mode": Config.HERMES_MODE if Config.HERMES_MODE in {"cli", "disabled"} else "disabled",
+    "hermes_concurrency_limit": Config.HERMES_MAX_CONCURRENT_TASKS,
+    "hermes_approval_mode": "strict",
+    "hermes_background_enabled": False,
     "hermes_schedules_enabled": False,
     "hermes_learning_enabled": False,
     "developer_mode": False,
@@ -70,6 +70,15 @@ class SettingsStore:
                         merged["piper_voice"] = str(Config.PIPER_MODEL)
                         if merged.get("openrouter_model") == "moonshotai/kimi-k3":
                             merged["openrouter_model"] = Config.OPENROUTER_MODEL
+                        # ``managed`` was a presentation-only value that the
+                        # adapter never supported.  Never preserve the older
+                        # unsafe background default either.
+                        if merged.get("hermes_mode") not in {"cli", "disabled"}:
+                            merged["hermes_mode"] = "disabled"
+                            merged["hermes_enabled"] = False
+                        merged["hermes_background_enabled"] = False
+                        merged["hermes_schedules_enabled"] = False
+                        merged["hermes_learning_enabled"] = False
                         self._data = merged
             except Exception:
                 self._data = dict(DEFAULTS)

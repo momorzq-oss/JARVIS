@@ -7,6 +7,6 @@
 - The controller owns one adapter. `stop_task()`, shutdown, and emergency dispatch cancel its exact active process and descendants, clear adapter state, and cancel all Hermes task records in addition to existing automation/live-task stop paths.
 - Piper remains the sole production speech service; no ElevenLabs dependency or configuration was introduced.
 
-Regression evidence: 558 tests collected, 558 passed, 0 failed, 0 skipped. Blocking fake Hermes processes prove cancellation and timeout terminate and clear the owned process; emergency dispatch proves the controller stop fan-out is reached. Explicit health probing reports an offline gateway and never invents a running service.
+Regression evidence: 566 tests collected, 566 passed, 0 failed, 0 skipped. Blocking fake Hermes processes prove cancellation and timeout terminate and clear the owned process; emergency dispatch proves the controller stop fan-out is reached. Explicit health probing reports an offline gateway and never invents a running service. Settings migration rejects the unsupported legacy `managed` value, forces autonomous flags off, and passes only non-secret provider/model data to the live adapter.
 
 Remaining gate: the real provider request returned HTTP 429 before a plan was produced. Hermes stays disabled and no candidate is promoted until a real protocol plan and the required safe pilots pass.

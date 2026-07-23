@@ -49,6 +49,26 @@ class HermesRuntimeManager:
             self.last_error = str(exc)
             return {"state": "DEGRADED", "detail": self.last_error, "installed": True}
 
+    def open_provider_setup(self):
+        """Open the official interactive model/provider picker on user request."""
+        if not self.installed:
+            return {"state": "NOT_INSTALLED", "detail": "External Hermes runtime not found"}
+        flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0) if os.name == "nt" else 0
+        kwargs = {"creationflags": flags} if flags else {}
+        try:
+            process = subprocess.Popen(
+                [str(self.python), str(self.launcher), "model"],
+                shell=False, cwd=str(self.repo), **kwargs,
+            )
+            return {
+                "state": "OPENED",
+                "detail": "Official Hermes provider/model setup opened in an interactive window.",
+                "process_id": process.pid,
+            }
+        except Exception as exc:
+            self.last_error = str(exc)
+            return {"state": "FAILED", "detail": self.last_error}
+
     def discover_tools(self):
         """Read official runtime metadata without launching an agent or tools."""
         code = (

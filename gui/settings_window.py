@@ -42,6 +42,8 @@ class SettingsWindow(QDialog):
         bridge = getattr(self.gc, "bridge", None)
         if bridge is not None and hasattr(bridge, "account_connection_changed"):
             bridge.account_connection_changed.connect(self._on_account_connection)
+        if bridge is not None and hasattr(bridge, "hermes_configuration_changed"):
+            bridge.hermes_configuration_changed.connect(self._on_hermes_configuration)
 
         note = QLabel("The OpenRouter API key is kept in the environment and is never shown here.")
         note.setObjectName("statusLabel")
@@ -212,18 +214,27 @@ class SettingsWindow(QDialog):
         self._add_check(form, "hermes_enabled", "Enable Hermes engine")
         self._add_combo(form, "hermes_provider", "Provider", ["openrouter", "openai", "anthropic", "custom"])
         self._add_line(form, "hermes_model", "Agent model")
-        self._add_combo(form, "hermes_mode", "Runtime mode", ["managed", "disabled"])
+        self._add_combo(form, "hermes_mode", "Runtime mode", ["disabled", "cli"])
         self._add_spin(form, "hermes_concurrency_limit", "Concurrent tasks", 1, 4, 1)
         self._add_combo(form, "hermes_approval_mode", "Approval mode", ["strict", "balanced", "trusted_session"])
         self._add_check(form, "hermes_background_enabled", "Enable background tasks")
         self._add_check(form, "hermes_schedules_enabled", "Enable schedules")
         self._add_check(form, "hermes_learning_enabled", "Enable generated-skill proposals")
+        for key in (
+            "hermes_background_enabled", "hermes_schedules_enabled",
+            "hermes_learning_enabled",
+        ):
+            self._widgets[key][1].setEnabled(False)
+            self._widgets[key][1].setToolTip("Locked off until the constrained Hermes pilot passes.")
         self.hermes_status = QLabel("Checking installed Hermes runtime…")
         self.hermes_status.setWordWrap(True)
         form.addRow("RUNTIME", self.hermes_status)
         self.btn_test_hermes = QPushButton("Test Hermes Runtime")
         self.btn_test_hermes.clicked.connect(self._on_test_hermes)
         form.addRow(self.btn_test_hermes)
+        self.btn_configure_hermes = QPushButton("Open Official Provider / Model Setup")
+        self.btn_configure_hermes.clicked.connect(self._on_configure_hermes)
+        form.addRow(self.btn_configure_hermes)
         return w
 
     def _on_test_hermes(self):
@@ -233,6 +244,21 @@ class SettingsWindow(QDialog):
             self.hermes_status.setText(f"{status.get('state')}: {status.get('detail')}")
         except Exception as exc:
             self.hermes_status.setText(f"FAILED: {exc}")
+
+    def _on_configure_hermes(self):
+        if self.gc is None or not hasattr(self.gc, "open_hermes_provider_setup"):
+            self.hermes_status.setText("FAILED: Running JARVIS controller unavailable.")
+            return
+        self.hermes_status.setText("Opening the official Hermes provider/model setup…")
+        if not self.gc.open_hermes_provider_setup():
+            self.hermes_status.setText("FAILED: JARVIS is shutting down.")
+
+    def _on_hermes_configuration(self, result):
+        result = result if isinstance(result, dict) else {}
+        self.hermes_status.setText(
+            f"{result.get('state', 'UNKNOWN')}: "
+            f"{result.get('detail', 'No setup result returned.')}"
+        )
 
     def _system_tab(self):
         w = QWidget()

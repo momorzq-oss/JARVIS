@@ -42,6 +42,36 @@ def test_pilot_command_forces_safe_mode_and_zero_toolset(monkeypatch, tmp_path):
     assert command[command.index("--query") + 1] == "plan"
 
 
+def test_live_adapter_configuration_drives_official_provider_arguments(monkeypatch, tmp_path):
+    runtime = tmp_path / "hermes" / "hermes-agent"
+    python = runtime / "venv" / "Scripts" / "python.exe"
+    launcher = runtime / "hermes"
+    python.parent.mkdir(parents=True)
+    python.write_text("")
+    launcher.write_text("")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    adapter = HermesAdapter(enabled=False, mode="disabled")
+
+    adapter.configure(
+        enabled=True, mode="cli", provider="openrouter",
+        model="openai/gpt-oss-safeguard-20b", timeout=45,
+    )
+    command = adapter._pilot_command("plan")
+
+    assert adapter.enabled is True
+    assert adapter.timeout == 45
+    assert command[command.index("--provider") + 1] == "openrouter"
+    assert command[command.index("--model") + 1] == "openai/gpt-oss-safeguard-20b"
+
+
+def test_adapter_rejects_presentation_only_runtime_mode():
+    adapter = HermesAdapter(enabled=False, mode="disabled")
+    with pytest.raises(HermesAdapterError, match="unsupported"):
+        adapter.configure(
+            enabled=True, mode="managed", provider="openrouter", model="model",
+        )
+
+
 def test_plan_decodes_official_quiet_output_as_utf8(monkeypatch):
     request = HermesPlanRequest("goal", "request", [], {}, [], {}, [])
     payload = {

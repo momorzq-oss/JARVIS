@@ -86,6 +86,7 @@ class ControllerBridge(QObject):
     emergency_stop_triggered = Signal()
     news_items_changed = Signal(object)
     account_connection_changed = Signal(str, object)
+    hermes_configuration_changed = Signal(object)
 
 
 class _Task(QRunnable):
@@ -305,6 +306,10 @@ class GuiController(QObject):
         c.set_callback("capabilities", self._forward_capabilities)
         c.set_callback("taskstatus", self._forward_taskstatus)
         c.set_callback("account_connection", self._forward_account_connection)
+        c.set_callback(
+            "hermes_configuration",
+            lambda result: b.hermes_configuration_changed.emit(result),
+        )
 
         # Set the confirmation handler for the DesktopAgent (called from worker thread)
         self.controller.agent.set_confirm_handler(self._confirmation_handler_from_agent)
@@ -502,6 +507,9 @@ class GuiController(QObject):
 
     def verify_account_login(self, account):
         self.run_async(self.controller.verify_account_login, account)
+
+    def open_hermes_provider_setup(self):
+        return self.run_async(self.controller.open_hermes_provider_setup)
 
     def status_snapshot(self):
         return self.controller.status_snapshot()

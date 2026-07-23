@@ -123,13 +123,41 @@ class AssistantController:
         """Apply runtime-safe settings without restarting JARVIS."""
         if self._settings is None:
             return False
+        audio_applied = False
         try:
-            return bool(self.speech.set_output_device(
+            audio_applied = bool(self.speech.set_output_device(
                 self._settings.get("speaker_device")
             ))
         except Exception as exc:
             audio_log.log_error(f"Unable to apply speaker settings: {exc}", exc)
-            return False
+        try:
+            mode = str(self._settings.get("hermes_mode", "disabled") or "disabled").lower()
+            enabled = bool(self._settings.get("hermes_enabled", False)) and mode == "cli"
+            provider = str(self._settings.get("hermes_provider", "openrouter") or "").strip()
+            model = str(self._settings.get("hermes_model", "") or "").strip()
+            concurrency = max(1, min(4, int(self._settings.get("hermes_concurrency_limit", 2))))
+            self.hermes_adapter.configure(
+                enabled=enabled, mode=mode, provider=provider, model=model,
+                timeout=Config.HERMES_TIMEOUT_SECONDS,
+            )
+            self.hermes_tasks.max_concurrent = concurrency
+            # Keep shared protocol/status consumers synchronized with the
+            # live, non-secret settings. Pilot-locked autonomy stays off.
+            Config.HERMES_ENABLED = self.hermes_adapter.enabled
+            Config.HERMES_MODE = self.hermes_adapter.mode
+            Config.HERMES_PROVIDER = self.hermes_adapter.provider
+            Config.HERMES_MODEL = self.hermes_adapter.model
+            Config.HERMES_MAX_CONCURRENT_TASKS = concurrency
+            Config.HERMES_BACKGROUND_TASKS_ENABLED = False
+            Config.HERMES_SCHEDULING_ENABLED = False
+            Config.HERMES_LEARNING_ENABLED = False
+        except Exception as exc:
+            audio_log.log_error(f"Unable to apply Hermes settings: {exc}", exc)
+            self.hermes_adapter.configure(
+                enabled=False, mode="disabled", provider="", model="",
+            )
+        self._emit("status", self.status_snapshot())
+        return audio_applied
 
     def _saved_mic(self):
         if self._settings is None:
@@ -172,7 +200,7 @@ class AssistantController:
             snap["openrouter_model"] = Config.OPENROUTER_MODEL
             # Retained as a compatibility key for existing GUI consumers.
             snap["kimi"] = snap["openrouter"]
-            hermes = hermes_health()
+            hermes = hermes_health(self.hermes_adapter)
             snap["hermes"] = hermes["status"]
             snap["hermes_detail"] = hermes["detail"]
             hermes_tasks = [task.__dict__.copy() for task in self.hermes_tasks.list()]
@@ -247,6 +275,12 @@ class AssistantController:
         result = self.account_connections.verify(account)
         self._emit("account_connection", str(account), result)
         self.start_capability_scan()
+        return result
+
+    def open_hermes_provider_setup(self):
+        from brain.hermes_runtime_manager import HermesRuntimeManager
+        result = HermesRuntimeManager().open_provider_setup()
+        self._emit("hermes_configuration", result)
         return result
 
     def preload_models(self):

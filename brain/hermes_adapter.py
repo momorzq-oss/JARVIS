@@ -33,9 +33,23 @@ class HermesAdapter:
         self.mode = (Config.HERMES_MODE if mode is None else mode).lower().strip()
         self.executable = (Config.HERMES_EXECUTABLE if executable is None else executable).strip()
         self.timeout = Config.HERMES_TIMEOUT_SECONDS if timeout is None else int(timeout)
+        self.provider = Config.HERMES_PROVIDER.strip()
+        self.model = (Config.HERMES_MODEL or Config.OPENROUTER_MODEL).strip()
         self._cancel_event = threading.Event()
         self._process_lock = threading.RLock()
         self._process = None
+
+    def configure(self, *, enabled, mode, provider, model, timeout=None) -> None:
+        """Apply non-secret GUI settings to this live adapter instance."""
+        normalized_mode = str(mode or "disabled").strip().lower()
+        if normalized_mode not in {"cli", "disabled"}:
+            raise HermesAdapterError("unsupported Hermes runtime mode")
+        self.mode = normalized_mode
+        self.enabled = bool(enabled) and normalized_mode == "cli"
+        self.provider = str(provider or "").strip()
+        self.model = str(model or "").strip()
+        if timeout is not None:
+            self.timeout = max(1, int(timeout))
 
     @property
     def running(self) -> bool:
@@ -144,12 +158,11 @@ class HermesAdapter:
         launcher = root / "hermes"
         if not python.is_file() or not launcher.is_file():
             raise HermesAdapterError("Hermes pilot runtime is not installed")
-        model = Config.HERMES_MODEL or Config.OPENROUTER_MODEL
-        if not model or not Config.HERMES_PROVIDER:
+        if not self.model or not self.provider:
             raise HermesAdapterError("Hermes provider or model is not configured")
         return [
             str(python), str(launcher), "chat", "--quiet", "--safe-mode",
-            "--provider", Config.HERMES_PROVIDER, "--model", model,
+            "--provider", self.provider, "--model", self.model,
             "--toolsets", "context_engine", "--max-turns", "1",
             "--source", "tool", "--query", prompt,
         ]

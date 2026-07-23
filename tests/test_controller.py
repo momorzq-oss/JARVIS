@@ -13,6 +13,7 @@ from core.assistant_controller import (
     AssistantController, STATE_IDLE, STATE_LISTENING_WAKE, STATE_PROCESSING,
 )
 from core.action_manager import Action
+from config import Config
 from voice.speech_service import SpeechOutputService # Import real SpeechOutputService
 
 
@@ -308,3 +309,36 @@ def test_voice_confirmation_no(monkeypatch):
     handled, result = main.handle_pending("no", ctx)
     assert handled is True
     assert result == "cancelled"
+
+
+def test_apply_settings_reconfigures_live_hermes_adapter_safely(monkeypatch):
+    ctx = make_ctx()
+    ctl = AssistantController(ctx=ctx, skip_preload=True)
+    values = {
+        "speaker_device": "default",
+        "hermes_enabled": True,
+        "hermes_mode": "cli",
+        "hermes_provider": "openrouter",
+        "hermes_model": "openai/gpt-oss-safeguard-20b",
+        "hermes_concurrency_limit": 2,
+    }
+    store = type("Store", (), {"get": lambda self, key, default=None: values.get(key, default)})()
+    ctl.attach_settings(store, initialize_audio=False)
+    ctl.speech.set_output_device = lambda _device: True
+    monkeypatch.setattr(ctl, "status_snapshot", lambda: {})
+    for key in (
+        "HERMES_ENABLED", "HERMES_MODE", "HERMES_PROVIDER", "HERMES_MODEL",
+        "HERMES_MAX_CONCURRENT_TASKS", "HERMES_BACKGROUND_TASKS_ENABLED",
+        "HERMES_SCHEDULING_ENABLED", "HERMES_LEARNING_ENABLED",
+    ):
+        monkeypatch.setattr(Config, key, getattr(Config, key))
+
+    assert ctl.apply_settings() is True
+    assert ctl.hermes_adapter.enabled is True
+    assert ctl.hermes_adapter.mode == "cli"
+    assert ctl.hermes_adapter.provider == "openrouter"
+    assert ctl.hermes_adapter.model == "openai/gpt-oss-safeguard-20b"
+    assert ctl.hermes_tasks.max_concurrent == 2
+    assert Config.HERMES_BACKGROUND_TASKS_ENABLED is False
+    assert Config.HERMES_SCHEDULING_ENABLED is False
+    assert Config.HERMES_LEARNING_ENABLED is False

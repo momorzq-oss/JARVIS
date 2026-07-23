@@ -18,6 +18,7 @@ from gui import styles
 from gui.workers import GuiController
 from gui.main_window import MainWindow
 from gui.widgets.hud import StatusIndicator
+from gui.settings_window import SettingsWindow
 
 from tests.test_controller import make_ctx
 
@@ -163,3 +164,35 @@ def test_voice_toggle_calls_controller(window, monkeypatch):
     window._on_start_voice()
     window._on_stop_voice()
     assert calls == {"start": 1, "stop": 1}
+
+
+def test_hermes_settings_use_real_cli_mode_and_official_setup(qapp, tmp_path, monkeypatch):
+    launched = []
+
+    class Controller:
+        bridge = None
+
+        def open_hermes_provider_setup(self):
+            launched.append(True)
+            return True
+
+        def apply_settings(self):
+            return True
+
+    monkeypatch.setattr(SettingsWindow, "_populate_devices", lambda self: None)
+    dialog = SettingsWindow(
+        SettingsStore(tmp_path / "settings.json"), Controller(),
+    )
+
+    mode = dialog._widgets["hermes_mode"][1]
+    assert {mode.itemText(index) for index in range(mode.count())} == {"cli", "disabled"}
+    assert not dialog._widgets["hermes_background_enabled"][1].isEnabled()
+    assert not dialog._widgets["hermes_schedules_enabled"][1].isEnabled()
+    assert not dialog._widgets["hermes_learning_enabled"][1].isEnabled()
+
+    dialog.btn_configure_hermes.click()
+    assert launched == [True]
+    dialog._on_hermes_configuration({"state": "OPENED", "detail": "Official setup opened."})
+    assert "OPENED" in dialog.hermes_status.text()
+    dialog.close()
+    dialog.deleteLater()

@@ -40,3 +40,25 @@ def test_unknown_key_raises(tmp_path):
 def test_no_api_key_in_defaults():
     blob = " ".join(DEFAULTS.keys()).lower()
     assert "api" not in blob and "key" not in blob
+
+
+def test_hermes_defaults_match_supported_safe_runtime_modes():
+    assert DEFAULTS["hermes_mode"] in {"cli", "disabled"}
+    assert DEFAULTS["hermes_background_enabled"] is False
+    assert DEFAULTS["hermes_schedules_enabled"] is False
+    assert DEFAULTS["hermes_learning_enabled"] is False
+
+
+def test_legacy_managed_hermes_settings_are_repaired_to_disabled(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(
+        '{"hermes_enabled": true, "hermes_mode": "managed", '
+        '"hermes_background_enabled": true}',
+        encoding="utf-8",
+    )
+
+    store = SettingsStore(path)
+
+    assert store.get("hermes_enabled") is False
+    assert store.get("hermes_mode") == "disabled"
+    assert store.get("hermes_background_enabled") is False

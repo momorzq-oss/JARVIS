@@ -527,8 +527,24 @@ class AssistantController:
         if not tasks:
             return None
         value = str(selector or "current").strip().lower()
-        if value in {"", "current", "active", "running", "latest", "last"}:
+        if value in {"", "current", "active", "latest", "last"}:
             return self._pick_current_hermes_task(tasks)
+        status_selectors = {
+            "running": {"RUNNING", "RETRYING"},
+            "paused": {"PAUSED"},
+            "planning": {"PLANNING"},
+            "waiting": {"WAITING_CONFIRMATION"},
+            "approval": {"WAITING_CONFIRMATION"},
+            "queued": {"QUEUED"},
+            "completed": {"COMPLETED"},
+            "failed": {"FAILED"},
+            "cancelled": {"CANCELLED"},
+            "canceled": {"CANCELLED"},
+        }
+        selected_statuses = status_selectors.get(value)
+        if selected_statuses:
+            matching = [task for task in tasks if task.status in selected_statuses]
+            return self._pick_latest_created_hermes_task(matching)
         numbers = {
             "one": 1, "first": 1, "two": 2, "second": 2,
             "three": 3, "third": 3, "four": 4, "fourth": 4,
@@ -553,16 +569,23 @@ class AssistantController:
             if task.status not in {"COMPLETED", "FAILED", "CANCELLED"}
         ]
         if active:
-            return max(
-                enumerate(active),
-                key=lambda item: (
-                    item[1].created_at, item[1].updated_at, item[0],
-                ),
-            )[1]
+            return AssistantController._pick_latest_created_hermes_task(active)
         return max(
             enumerate(tasks),
             key=lambda item: (
                 item[1].updated_at, item[1].created_at, item[0],
+            ),
+        )[1]
+
+    @staticmethod
+    def _pick_latest_created_hermes_task(tasks):
+        tasks = list(tasks or [])
+        if not tasks:
+            return None
+        return max(
+            enumerate(tasks),
+            key=lambda item: (
+                item[1].created_at, item[1].updated_at, item[0],
             ),
         )[1]
 

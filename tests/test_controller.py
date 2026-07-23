@@ -673,6 +673,9 @@ def test_mission_control_and_current_command_select_same_latest_active_task():
     snapshot = ctl.status_snapshot()
 
     assert ctl._select_hermes_task("current").task_id == second.task_id
+    assert ctl._select_hermes_task("running").task_id == first.task_id
+    assert ctl._select_hermes_task("waiting").task_id == second.task_id
+    assert ctl._select_hermes_task("approval").task_id == second.task_id
     assert snapshot["hermes_task"] == "newer approval goal"
     assert snapshot["hermes_task_status"] == "WAITING_CONFIRMATION"
     assert snapshot["hermes_plan_summary"] == "Approve the newer plan"
@@ -698,6 +701,19 @@ def test_current_task_falls_back_to_most_recently_updated_terminal_task():
 
     assert ctl._select_hermes_task("current").task_id == first.task_id
     assert snapshot["hermes_task"] == "older created, newer completed"
+
+
+def test_status_task_selectors_choose_only_matching_state():
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    running = ctl.hermes_tasks.create("running")
+    ctl.hermes_tasks.transition(running.task_id, "RUNNING", steps=1)
+    paused = ctl.hermes_tasks.create("paused")
+    ctl.hermes_tasks.transition(paused.task_id, "RUNNING", steps=1)
+    ctl.hermes_tasks.pause(paused.task_id)
+
+    assert ctl._select_hermes_task("running").task_id == running.task_id
+    assert ctl._select_hermes_task("paused").task_id == paused.task_id
+    assert ctl._select_hermes_task("failed") is None
 
 
 def test_planning_task_cancel_stops_exact_adapter_request(monkeypatch):

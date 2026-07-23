@@ -69,3 +69,15 @@ One final-package live run found four sources but received empty draft text from
 The final armored-sentinel hash was launched directly, completed packaged browser command validation, and retained the prior acoustic voice validation. The full source suite passed 250/250.
 
 Final release classification: **NOT READY** pending human voice validation. Do not proceed to Hermes yet.
+
+## 2026-07-23 Non-Destructive Revalidation
+
+- Production hash remained `7210C318BF0EDA12ECEEEBDB0896C0C63E3C5FF733ADF1ACC439F20C95192235`.
+- Production startup, screen bounds, responsiveness, wake-word loading, USB microphone, and deterministic time routing passed.
+- Production typed-response Piper failed: no Piper worker, synthesis, playback start, or playback completion followed the command within 40 seconds.
+- Existing candidate hash remained `6EE9379F43F44C5EEE369768FBE159CC6CEF35A5A862E1B6FB383CDAE9D64461`.
+- Existing candidate startup initially displayed the truthful `JARVIS · Starting` shell, became responsive, completed bundled Piper greeting playback, and completed one typed time-response playback.
+- Neither executable nor release directory was modified, promoted, or overwritten.
+- The current source suite reports 606 collected, 606 passed, 0 failed, and 0 skipped.
+
+Current production classification: **NOT READY**. Existing candidate classification: **AUDIO PASS, STILL UNPROMOTED** pending the remaining Hermes and full candidate gates.

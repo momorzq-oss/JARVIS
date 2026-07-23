@@ -3,6 +3,7 @@
 from desktop_main import (
     _auto_voice_requested,
     _parse_args,
+    _queue_deferred_capability_scan,
     _run_background_startup,
     _startup_preload_enabled,
 )
@@ -116,3 +117,24 @@ def test_auto_voice_startup_can_defer_noncritical_capability_scan():
     assert "voice" in names
     assert "scan" not in names
     assert "complete" in names
+
+
+def test_deferred_capability_scan_runs_once_after_voice_settle_delay():
+    scheduled = []
+    events = []
+
+    def schedule(delay_ms, callback):
+        scheduled.append((delay_ms, callback))
+
+    def run_async(callback):
+        events.append("queued")
+        callback()
+
+    _queue_deferred_capability_scan(
+        schedule, run_async, lambda: events.append("scan"),
+    )
+
+    assert events == []
+    assert scheduled[0][0] == 20_000
+    scheduled[0][1]()
+    assert events == ["queued", "scan"]

@@ -193,6 +193,11 @@ def _finish_background_startup(controller, bridge, registry_items):
     bridge.startupCompleted.emit()
 
 
+def _queue_deferred_capability_scan(schedule, run_async, scan, delay_ms=20_000):
+    """Queue inventory after auto-voice and its first Piper greeting settle."""
+    schedule(int(delay_ms), lambda: run_async(scan))
+
+
 def main(argv=None):
     args = _parse_args(argv)
     startup_started = time.perf_counter()
@@ -453,6 +458,22 @@ def main(argv=None):
     if auto_voice_requested:
         gui_controller.bridge.autoVoiceStarted.connect(
             window._on_auto_voice_started
+        )
+        deferred_scan_queued = False
+
+        def queue_deferred_capability_scan():
+            nonlocal deferred_scan_queued
+            if deferred_scan_queued:
+                return
+            deferred_scan_queued = True
+            _queue_deferred_capability_scan(
+                QTimer.singleShot,
+                gui_controller.run_async,
+                gui_controller.controller.start_capability_scan,
+            )
+
+        gui_controller.bridge.startupCompleted.connect(
+            queue_deferred_capability_scan
         )
 
     def run_startup():

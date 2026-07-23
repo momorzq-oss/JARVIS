@@ -41,6 +41,14 @@ def test_assignment_metadata_extraction():
     assert data["requested_mode"] == "final_draft"
 
 
+def test_assignment_topic_drops_first_draft_mode_suffix():
+    data = parse_assignment_request(
+        "Write a 300-word undergraduate APA 7 essay about renewable energy as a first draft live in Word"
+    )
+    assert data["topic"] == "renewable energy"
+    assert data["requested_mode"] == "first_draft"
+
+
 def test_outline_only_does_not_require_a_citation_style():
     data = parse_assignment_request("Create only the essay outline first about robotics")
     assert data["requested_mode"] == "outline_only"
@@ -74,6 +82,24 @@ def test_pending_assignment_preempts_generic_pending_route():
     route = select_route("Make it 3,000 words", ctx)
     assert route["route_type"] == "intent"
     assert route["intent"]["skill"] == "university.assignment"
+
+
+def test_pending_save_filename_does_not_restart_university_assignment():
+    ctx = SimpleNamespace(
+        state={"university_assignment": parse_assignment_request(
+            "Write an APA 7 essay about renewable energy"
+        )},
+        pending={"kind": "save_document", "request": object()},
+        router=None,
+    )
+
+    route = select_route(
+        "Save it in the JARVIS test folder as renewable energy assignment validation",
+        ctx,
+    )
+
+    assert route["route_type"] == "pending"
+    assert route["pending_kind"] == "save_document"
 
 
 def _source(index=1):

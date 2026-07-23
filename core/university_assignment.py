@@ -126,7 +126,7 @@ def _topic(text):
         r"\b(?:for|at)\s+(?:undergraduate|postgraduate|master|doctoral|phd)\b|"
         r"\b(?:live|visibly)\s+in\s+(?:microsoft\s+)?word\b|"
         r"\b(?:and\s+)?save\s+(?:it\s+)?(?:to|in)\b|"
-        r"\b(?:outline only|first draft|final draft|final version)\b",
+        r"\b(?:as\s+(?:an?\s+)?)?(?:outline only|first draft|final draft|final version)\b",
         value,
         maxsplit=1,
         flags=re.I,
@@ -209,6 +209,11 @@ def classify_assignment_intent(text, state=None):
     """Return the one registered assignment intent for creation and follow-ups."""
     request = str(text or "").strip()
     if not request:
+        return None
+    # Save/close/task controls belong to the active workflow. Words such as
+    # "assignment" may legitimately appear in a requested filename and must
+    # never restart University Mode while its Word document is awaiting save.
+    if re.match(r"^(?:save|close|pause|resume|cancel|stop)\b", request, re.I):
         return None
     current = state.get("university_assignment") if isinstance(state, dict) else None
     detected_type = _assignment_type(request)

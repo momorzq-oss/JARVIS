@@ -27,6 +27,11 @@ class PendingSaveRequest:
     def resolve(self, response):
         raw = (response or "").strip().strip('"').strip("'")
         raw = re.sub(r"^(?:save (?:it )?(?:in|to)|in|to)\s+", "", raw, flags=re.I)
+        filename_override = ""
+        save_as = re.fullmatch(r"(.+?)\s+as\s+([^\\/:*?\"<>|]+)", raw, re.I)
+        if save_as:
+            raw = save_as.group(1).strip()
+            filename_override = save_as.group(2).strip(" .")
         folders = known_folders()
         low = raw.lower().strip(" .")
 
@@ -62,7 +67,7 @@ class PendingSaveRequest:
             base = Path(base)
             if child:
                 base = base / child
-            filename = _safe_filename(self.suggested_filename)
+            filename = _safe_filename(filename_override or self.suggested_filename)
             extension = self.suggested_extension
             if extension and not filename.lower().endswith(extension.lower()):
                 filename += extension

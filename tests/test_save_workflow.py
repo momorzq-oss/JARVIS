@@ -43,6 +43,28 @@ def test_jarvis_test_folder_alias(monkeypatch, tmp_path):
     assert resolved == tmp_path / ".test_tmp" / "Report.docx"
 
 
+def test_save_location_supports_a_safe_custom_filename(monkeypatch, tmp_path):
+    monkeypatch.setattr("core.save_workflow.Config.TEMP_DIR", tmp_path / ".test_tmp")
+    request = PendingSaveRequest("t", "Word", "Report", ".docx", "Word")
+
+    resolved = request.resolve(
+        "Save it in the JARVIS test folder as renewable energy assignment validation"
+    )
+
+    assert resolved == (
+        tmp_path / ".test_tmp" / "renewable energy assignment validation.docx"
+    )
+
+
+def test_save_location_does_not_accept_path_characters_in_filename(monkeypatch, tmp_path):
+    monkeypatch.setattr("core.save_workflow.Config.TEMP_DIR", tmp_path / ".test_tmp")
+    request = PendingSaveRequest("t", "Word", "Report", ".docx", "Word")
+
+    assert request.resolve(
+        "Save it in the JARVIS test folder as ..\\outside"
+    ) is None
+
+
 def test_nested_folder_creation_is_disclosed(tmp_path):
     request = PendingSaveRequest("t", "Word", "Report", ".docx", "Word")
     request.resolve(str(tmp_path / "new" / "nested"))

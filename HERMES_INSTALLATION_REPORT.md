@@ -19,7 +19,7 @@ The official installer was downloaded, hashed, and reviewed. The repository stag
 - `hermes --help` and `hermes doctor`: run successfully. Doctor showed optional messaging SDKs absent, but global tool availability exists and is never exposed through JARVIS.
 - API keys: not read, copied, or logged.
 
-The latest zero-tool OpenRouter planning request returned HTTP 429 after retries. No plan or action was executed. The constrained adapter now resolves the exact external session dump to a redacted provider error instead of exposing only an opaque session ID, and remains disabled pending a successful, validated response. Its active plan process is cancellable through normal stop, shutdown, timeout, and emergency-stop paths; the complete suite reports 581 collected and 581 passed.
+The latest zero-tool OpenRouter planning request returned HTTP 429 after retries. No plan or action was executed. The constrained adapter now resolves the exact external session dump to a redacted provider error instead of exposing only an opaque session ID, and remains disabled pending a successful, validated response. Its active plan process is cancellable through normal stop, shutdown, timeout, and emergency-stop paths; the complete suite reports 585 collected and 585 passed.
 
 The JARVIS Settings window now applies the supported `cli`/`disabled` mode, provider, model, and concurrency values to the live adapter. Its explicit **Open Official Provider / Model Setup** button launches the audited external `hermes model` picker directly with `shell=False`; JARVIS never reads or stores the credentials entered through that official flow. Background work, schedules, and learning remain visibly locked off.
 

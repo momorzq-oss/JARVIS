@@ -363,6 +363,7 @@ def test_exact_office_product_nouns_keep_flexible_creation_verbs():
         ("Maximize that window", "window.maximize"),
         ("Restore the current window", "window.restore"),
         ("Bring it to the front", "window.front"),
+        ("Bring it back up", "window.front"),
         ("Focus on this window", "window.focus"),
     ],
 )

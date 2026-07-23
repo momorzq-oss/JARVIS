@@ -597,6 +597,7 @@ def classify_local_intent(text, state=None):
             }
         if re.fullmatch(
             rf"(?:bring|switch)\s+(?:to\s+)?(?:the\s+)?{relative_target}"
+            rf"(?:\s+back)?"
             rf"(?:\s+to\s+(?:the\s+)?front|\s+up)?",
             low,
         ):

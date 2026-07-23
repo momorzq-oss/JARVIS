@@ -1,6 +1,7 @@
 import pytest
 
 from brain.hermes_task_manager import HermesTaskManager
+from config import Config
 
 
 def test_task_lifecycle_pause_resume_cancel():
@@ -130,3 +131,49 @@ def test_cancel_does_not_mutate_already_terminal_tasks(terminal):
     with pytest.raises(RuntimeError, match=f"already {terminal.lower()}"):
         manager.cancel(task.task_id)
     assert manager.get(task.task_id).cancellation_token is False
+
+
+def test_task_record_updates_require_valid_execution_states(monkeypatch):
+    manager = HermesTaskManager(max_concurrent=2)
+    queued = manager.create("queued")
+    with pytest.raises(RuntimeError, match="waiting for confirmation"):
+        manager.record_confirmation(queued.task_id, "forged")
+    with pytest.raises(RuntimeError, match="not running"):
+        manager.record_retry(queued.task_id, "forged")
+    with pytest.raises(RuntimeError, match="not executing"):
+        manager.complete_step(queued.task_id, "browser.read_page", "SAFE_READ")
+
+    running = manager.create("running")
+    manager.transition(running.task_id, "RUNNING", steps=1)
+    manager.complete_step(running.task_id, "browser.read_page", "SAFE_READ")
+    with pytest.raises(RuntimeError, match="no remaining planned step"):
+        manager.complete_step(running.task_id, "browser.read_page", "SAFE_READ")
+
+
+def test_step_and_retry_limits_are_enforced(monkeypatch):
+    manager = HermesTaskManager(max_concurrent=2)
+    task = manager.create("bounded")
+    with pytest.raises(ValueError, match="outside policy"):
+        manager.transition(
+            task.task_id, "WAITING_CONFIRMATION",
+            steps=Config.HERMES_MAX_STEPS + 1,
+        )
+
+    retrying = manager.create("retrying")
+    manager.transition(retrying.task_id, "RUNNING", steps=1)
+    monkeypatch.setattr(Config, "HERMES_MAX_RETRIES", 1)
+    manager.record_retry(retrying.task_id, "first")
+    with pytest.raises(RuntimeError, match="retry limit"):
+        manager.record_retry(retrying.task_id, "second")
+
+
+def test_completed_task_clears_recovered_retry_error():
+    manager = HermesTaskManager(max_concurrent=1)
+    task = manager.create("recover")
+    manager.transition(task.task_id, "RUNNING", steps=1)
+    manager.record_retry(task.task_id, "temporary")
+    manager.transition(task.task_id, "RETRYING", error="temporary")
+    manager.transition(task.task_id, "RUNNING")
+    manager.complete_step(task.task_id, "browser.read_page", "SAFE_READ")
+    completed = manager.transition(task.task_id, "COMPLETED")
+    assert completed.last_error == ""

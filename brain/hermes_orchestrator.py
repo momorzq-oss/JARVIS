@@ -106,6 +106,10 @@ class HermesOrchestrator:
                 return plan, current, results
             attempts = 0
             while True:
+                if not self.tasks.wait_until_runnable(task.task_id):
+                    current = self.tasks.get(task.task_id)
+                    self._event("task_finished", task_id=task.task_id, status="CANCELLED")
+                    return plan, current, results
                 try:
                     self._event(
                         "step_started", task_id=task.task_id,
@@ -125,14 +129,24 @@ class HermesOrchestrator:
                     if (step["failure_strategy"] == "retry"
                             and attempts < Config.HERMES_MAX_RETRIES):
                         attempts += 1
-                        self.tasks.record_retry(task.task_id, str(exc))
-                        self._event(
-                            "step_retry", task_id=task.task_id,
-                            step_id=step["step_id"], capability_id=step["capability_id"],
-                            attempt=attempts, error=str(exc),
-                        )
-                        self.tasks.transition(task.task_id, "RETRYING", error=str(exc))
-                        self.tasks.transition(task.task_id, "RUNNING")
+                        try:
+                            self.tasks.record_retry(task.task_id, str(exc))
+                            self._event(
+                                "step_retry", task_id=task.task_id,
+                                step_id=step["step_id"], capability_id=step["capability_id"],
+                                attempt=attempts, error=str(exc),
+                            )
+                            self.tasks.transition(task.task_id, "RETRYING", error=str(exc))
+                            self.tasks.transition(task.task_id, "RUNNING")
+                        except RuntimeError:
+                            current = self.tasks.get(task.task_id)
+                            if current is not None and current.cancellation_token:
+                                self._event(
+                                    "task_finished", task_id=task.task_id,
+                                    status="CANCELLED",
+                                )
+                                return plan, current, results
+                            raise
                         continue
                     self.tasks.transition(task.task_id, "FAILED", error=str(exc))
                     self._event(

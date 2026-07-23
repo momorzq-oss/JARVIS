@@ -212,6 +212,33 @@ def test_cancelled_failed_step_does_not_retry_or_overwrite_terminal_state():
     assert results == []
 
 
+def test_cancel_during_retry_state_update_returns_cancelled_cleanly():
+    orchestrator = HermesOrchestrator(capability_registry=_browser_registry())
+    request = orchestrator.prepare_request("goal", "request")
+    payload = _one_step_plan(request, failure_strategy="retry")
+    _plan, waiting = orchestrator.accept_plan(request, payload)
+    attempts = []
+
+    def on_event(name, data):
+        if name == "step_retry":
+            orchestrator.tasks.cancel(data["task_id"])
+
+    orchestrator._event_callback = on_event
+
+    def execute(_step):
+        attempts.append(True)
+        raise RuntimeError("temporary failure")
+
+    _plan, task, results = orchestrator.run_approved_plan(
+        request, payload, execute, approved=True, task_id=waiting.task_id,
+    )
+
+    assert attempts == [True]
+    assert task.status == "CANCELLED"
+    assert task.retries == 1
+    assert results == []
+
+
 def test_orchestrator_emits_linked_metadata_events_without_step_parameters():
     events = []
     orchestrator = HermesOrchestrator(

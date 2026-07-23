@@ -90,6 +90,19 @@ class HermesTaskManager:
             raise ValueError("unknown Hermes task status")
         with self._lock:
             task = self._tasks[task_id]
+            parsed_steps = None
+            if steps is not None:
+                parsed_steps = int(steps)
+                if not 0 <= parsed_steps <= Config.HERMES_MAX_STEPS:
+                    raise ValueError("Hermes task step count is outside policy")
+                if parsed_steps < task.current_step:
+                    raise ValueError("Hermes task step count is below completed progress")
+                if task.total_steps and parsed_steps != task.total_steps:
+                    raise ValueError("Hermes task step count cannot change")
+            if status == "WAITING_CONFIRMATION" and not (
+                parsed_steps if parsed_steps is not None else task.total_steps
+            ):
+                raise ValueError("Hermes task requires at least one planned step")
             if status != task.status and status not in TASK_TRANSITIONS[task.status]:
                 raise RuntimeError(
                     f"invalid Hermes task transition: {task.status} -> {status}"
@@ -103,8 +116,10 @@ class HermesTaskManager:
                 task.completed_at = task.updated_at
             if error:
                 task.last_error = str(error)
-            if steps is not None:
-                task.total_steps = int(steps)
+            elif status in {"RUNNING", "COMPLETED"}:
+                task.last_error = ""
+            if parsed_steps is not None:
+                task.total_steps = parsed_steps
             self._changed.notify_all()
             return self._snapshot(task)
 
@@ -126,6 +141,10 @@ class HermesTaskManager:
     def record_confirmation(self, task_id: str, decision: str) -> HermesTask:
         with self._lock:
             task = self._tasks[task_id]
+            if task.status != "WAITING_CONFIRMATION":
+                raise RuntimeError("task is not waiting for confirmation")
+            if task.confirmations:
+                raise RuntimeError("task confirmation is already recorded")
             task.confirmations.append(str(decision))
             task.updated_at = time.time()
             self._changed.notify_all()
@@ -134,6 +153,10 @@ class HermesTaskManager:
     def record_retry(self, task_id: str, error: str) -> HermesTask:
         with self._lock:
             task = self._tasks[task_id]
+            if task.cancellation_token or task.status != "RUNNING":
+                raise RuntimeError("task is not running")
+            if task.retries >= Config.HERMES_MAX_RETRIES:
+                raise RuntimeError("Hermes task retry limit reached")
             task.retries += 1
             task.last_error = str(error)
             task.updated_at = time.time()
@@ -146,6 +169,10 @@ class HermesTaskManager:
             task = self._tasks[task_id]
             if task.cancellation_token:
                 raise RuntimeError("task is cancelled")
+            if task.status not in {"RUNNING", "PAUSED"}:
+                raise RuntimeError("task is not executing")
+            if task.total_steps <= 0 or task.current_step >= task.total_steps:
+                raise RuntimeError("Hermes task has no remaining planned step")
             task.current_step = min(task.total_steps, task.current_step + 1)
             task.progress = (
                 task.current_step / task.total_steps if task.total_steps else 1.0

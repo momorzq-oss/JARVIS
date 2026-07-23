@@ -31,7 +31,8 @@ class HermesRuntimeManager:
         if not self.installed:
             raise RuntimeError("Hermes is not installed")
         return subprocess.run([str(self.python), str(self.launcher), *args], shell=False,
-            cwd=str(self.repo), text=True, capture_output=True, timeout=timeout or self.timeout,
+            cwd=str(self.repo), text=True, encoding="utf-8", errors="replace",
+            capture_output=True, timeout=timeout or self.timeout,
             **_background_process_kwargs(),
             check=False)
 
@@ -59,7 +60,8 @@ class HermesRuntimeManager:
             return []
         try:
             result = subprocess.run([str(self.python), "-c", code], shell=False, cwd=str(self.repo),
-                text=True, capture_output=True, timeout=self.timeout,
+                text=True, encoding="utf-8", errors="replace", capture_output=True,
+                timeout=self.timeout,
                 **_background_process_kwargs(), check=False)
             if result.returncode:
                 raise RuntimeError(result.stderr.strip())

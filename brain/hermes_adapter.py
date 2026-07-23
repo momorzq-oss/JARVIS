@@ -51,8 +51,12 @@ class HermesAdapter:
         model = Config.HERMES_MODEL or Config.OPENROUTER_MODEL
         if not model or not Config.HERMES_PROVIDER:
             raise HermesAdapterError("Hermes provider or model is not configured")
-        return [str(python), str(launcher), "--safe-mode", "--provider", Config.HERMES_PROVIDER,
-                "--model", model, "--toolsets", "context_engine", "-z", prompt]
+        return [
+            str(python), str(launcher), "chat", "--quiet", "--safe-mode",
+            "--provider", Config.HERMES_PROVIDER, "--model", model,
+            "--toolsets", "context_engine", "--max-turns", "1",
+            "--source", "tool", "--query", prompt,
+        ]
 
     def diagnostic(self, command="--help") -> str:
         if not self.enabled or self.mode == "disabled":
@@ -63,7 +67,8 @@ class HermesAdapter:
             raise HermesAdapterError("unsupported Hermes diagnostic")
         try:
             result = subprocess.run([self._binary(), command], shell=False, capture_output=True,
-                                    text=True, timeout=self.timeout, check=False,
+                                    text=True, encoding="utf-8", errors="replace",
+                                    timeout=self.timeout, check=False,
                                     **_background_process_kwargs())
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise HermesAdapterError(f"Hermes diagnostic failed: {exc}") from exc
@@ -85,7 +90,8 @@ class HermesAdapter:
         )
         try:
             result = subprocess.run(self._pilot_command(prompt), shell=False, capture_output=True,
-                                    text=True, timeout=self.timeout, check=False,
+                                    text=True, encoding="utf-8", errors="replace",
+                                    timeout=self.timeout, check=False,
                                     cwd=str(Config.TEMP_DIR), **_background_process_kwargs())
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise HermesAdapterError(f"Hermes planning failed: {exc}") from exc

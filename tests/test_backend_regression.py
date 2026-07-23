@@ -137,12 +137,24 @@ def test_common_apps_resolve():
 
 def test_folder_launch_registers_only_after_start(monkeypatch, tmp_path):
     ctx = fake_context()
-    monkeypatch.setattr(system_control.os, "startfile", lambda *_args: None)
+    opened = []
+
+    class ExplorerProcess:
+        pid = 456
+
+    def fake_popen(args, **kwargs):
+        opened.append((args, kwargs))
+        return ExplorerProcess()
+
+    monkeypatch.setattr(system_control.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(system_control, "_native_process_ids_by_name", lambda _name: {456})
     monkeypatch.setattr(
         system_control, "_find_new_folder_window",
         lambda *_args, **_kwargs: (123, 456, tmp_path.name),
     )
     result = system_control.open_thing(str(tmp_path), ctx, preferred_kind="folder")
+    assert opened[0][0] == ["explorer.exe", str(tmp_path)]
+    assert opened[0][1]["shell"] is False
     assert result.startswith("Opening the folder")
     assert ctx.registry.entries[-1]["type"] == "folder"
     assert ctx.registry.entries[-1]["extra"]["path"] == str(tmp_path)

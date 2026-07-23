@@ -622,8 +622,19 @@ def classify_local_intent(text, state=None):
         low,
     ):
         return {"skill": "app.close", "params": {"target": "__recent_folder__"}}
-    if re.fullmatch(r"(?:close|shut|exit|quit) (?:it|this|that|the application|the app)", low):
-        target = str(context.get("current_application") or "")
+    if re.fullmatch(
+        r"(?:close|shut|exit|quit) "
+        r"(?:it|this|that|the application|the app)"
+        r"(?: (?:again|now|please|for me))*",
+        low,
+    ):
+        current_folder = str(context.get("current_folder") or "").strip()
+        current_application = str(context.get("current_application") or "").strip()
+        target = (
+            "__recent_folder__"
+            if current_folder and current_application.lower() == "file explorer"
+            else current_application
+        )
         return {"skill": "app.close", "params": {"target": target}}
     if low.startswith(("close ", "shut ", "exit ", "quit ")):
         for alias in sorted(APPLICATION_ALIASES, key=len, reverse=True):

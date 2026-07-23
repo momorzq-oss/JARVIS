@@ -226,8 +226,16 @@ def fast_lane(text, state=None):
             return browser_intent
     except Exception:
         pass
+    rule_text = t
+    try:
+        from core.automation_intents import _strip_request_scaffolding
+        rule_text = _strip_request_scaffolding(t) or t
+    except Exception:
+        pass
     for pattern, builder in FAST_RULES:
         m = pattern.search(t)
+        if m is None and rule_text != t:
+            m = pattern.search(rule_text)
         if m:
             try:
                 return builder(m)

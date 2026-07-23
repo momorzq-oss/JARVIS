@@ -62,3 +62,23 @@ def test_legacy_managed_hermes_settings_are_repaired_to_disabled(tmp_path):
     assert store.get("hermes_enabled") is False
     assert store.get("hermes_mode") == "disabled"
     assert store.get("hermes_background_enabled") is False
+
+
+def test_legacy_hermes_model_is_migrated_and_persisted(tmp_path):
+    import json
+
+    from config import Config
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        '{"hermes_model": "openai/gpt-oss-120b"}',
+        encoding="utf-8",
+    )
+
+    store = SettingsStore(path)
+
+    assert store.get("hermes_model") == "openai/gpt-oss-safeguard-20b"
+    assert store.get("hermes_model") == Config.OPENROUTER_MODEL
+    assert json.loads(path.read_text(encoding="utf-8"))["hermes_model"] == (
+        "openai/gpt-oss-safeguard-20b"
+    )

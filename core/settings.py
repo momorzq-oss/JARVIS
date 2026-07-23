@@ -59,6 +59,7 @@ class SettingsStore:
                 if self.path.exists():
                     raw = json.loads(self.path.read_text(encoding="utf-8"))
                     if isinstance(raw, dict):
+                        migrated = False
                         merged = dict(DEFAULTS)
                         for key, value in raw.items():
                             if key in merged:
@@ -70,16 +71,31 @@ class SettingsStore:
                         merged["piper_voice"] = str(Config.PIPER_MODEL)
                         if merged.get("openrouter_model") == "moonshotai/kimi-k3":
                             merged["openrouter_model"] = Config.OPENROUTER_MODEL
+                            migrated = True
+                        if merged.get("hermes_model") in {
+                            "moonshotai/kimi-k3", "openai/gpt-oss-120b",
+                        }:
+                            merged["hermes_model"] = Config.OPENROUTER_MODEL
+                            migrated = True
                         # ``managed`` was a presentation-only value that the
                         # adapter never supported.  Never preserve the older
                         # unsafe background default either.
                         if merged.get("hermes_mode") not in {"cli", "disabled"}:
                             merged["hermes_mode"] = "disabled"
                             merged["hermes_enabled"] = False
+                            migrated = True
+                        if merged.get("hermes_background_enabled") is not False:
+                            migrated = True
+                        if merged.get("hermes_schedules_enabled") is not False:
+                            migrated = True
+                        if merged.get("hermes_learning_enabled") is not False:
+                            migrated = True
                         merged["hermes_background_enabled"] = False
                         merged["hermes_schedules_enabled"] = False
                         merged["hermes_learning_enabled"] = False
                         self._data = merged
+                        if migrated:
+                            self.save()
             except Exception:
                 self._data = dict(DEFAULTS)
             return dict(self._data)

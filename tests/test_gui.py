@@ -185,6 +185,30 @@ def test_status_bridge_restores_live_wake_state_after_piper_completion(window):
     assert "Waiting for Hey Jarvis" in window.dashboard.state_banner.text()
 
 
+def test_hermes_controls_dispatch_exact_displayed_task_id(window, monkeypatch):
+    commands = []
+    monkeypatch.setattr(window, "_quick", commands.append)
+    task_id = "12345678-1234-1234-1234-123456789abc"
+    window._slot_status({
+        "state": "ready",
+        "system_metrics": {},
+        "hermes_task_id": task_id,
+        "hermes_task": "Displayed task",
+        "hermes_task_status": "WAITING_CONFIRMATION",
+        "hermes_approval_pending": True,
+    })
+
+    window.dashboard.hermes.approve_button.click()
+    window.dashboard.hermes.deny_button.click()
+    window.dashboard.hermes.cancel_button.click()
+
+    assert commands == [
+        f"approve Hermes task {task_id}",
+        f"deny Hermes task {task_id}",
+        f"cancel Hermes task {task_id}",
+    ]
+
+
 def test_hermes_settings_use_real_cli_mode_and_official_setup(qapp, tmp_path, monkeypatch):
     launched = []
 

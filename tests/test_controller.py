@@ -677,6 +677,7 @@ def test_mission_control_and_current_command_select_same_latest_active_task():
     assert ctl._select_hermes_task("waiting").task_id == second.task_id
     assert ctl._select_hermes_task("approval").task_id == second.task_id
     assert snapshot["hermes_task"] == "newer approval goal"
+    assert snapshot["hermes_task_id"] == second.task_id
     assert snapshot["hermes_task_status"] == "WAITING_CONFIRMATION"
     assert snapshot["hermes_plan_summary"] == "Approve the newer plan"
     assert snapshot["hermes_approval_pending"] is True

@@ -55,6 +55,8 @@ class ActionManager:
         "window.restore": ("DESKTOP_CONTROL", "low"),
         "window.close": ("DESKTOP_CONTROL", "medium"),
         "system.stop_speech": ("DESKTOP_CONTROL", "low"),
+        "system.voice_start": ("DESKTOP_CONTROL", "low"),
+        "system.voice_stop": ("DESKTOP_CONTROL", "low"),
         "system.volume": ("DESKTOP_CONTROL", "low"),
         "system.screenshot": ("SAFE_WRITE", "low"),
         "system.lock": ("DESKTOP_CONTROL", "medium"),

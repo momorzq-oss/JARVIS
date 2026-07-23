@@ -60,8 +60,11 @@ def test_llm_sanitizes_key_in_error(monkeypatch):
     llm.last_error = ""
     llm._lock = __import__("threading").Lock()
 
+    calls = []
+
     class Completions:
         def create(self, **kwargs):
+            calls.append(kwargs)
             raise RuntimeError("401 unauthorized for sk-secret-123")
 
     llm._client = type("C", (), {"chat": type("X", (), {"completions": Completions()})()})()
@@ -69,6 +72,7 @@ def test_llm_sanitizes_key_in_error(monkeypatch):
     assert ok is False
     assert "sk-secret-123" not in detail       # key scrubbed
     assert "***" in detail
+    assert calls and calls[0]["model"] == llm.model
 
 # ---- DesktopAgent ------------------------------------------------------------
 class _FakeCtx:

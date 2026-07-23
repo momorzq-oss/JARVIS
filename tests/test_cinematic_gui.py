@@ -130,9 +130,11 @@ def test_hermes_panel_consumes_real_task_progress_fields(window):
 
 def test_hermes_approval_controls_enable_only_for_real_pending_plan(qapp, window, monkeypatch):
     commands = []
+    task_id = "12345678-1234-1234-1234-123456789abc"
     monkeypatch.setattr(window, "_quick", lambda text: commands.append(text))
     window._slot_status({
-        "hermes": "configured", "hermes_task": "Safe research",
+        "hermes": "configured", "hermes_task_id": task_id,
+        "hermes_task": "Safe research",
         "hermes_task_status": "WAITING_CONFIRMATION", "hermes_steps": "0/1",
         "hermes_approval_pending": True,
         "hermes_plan_summary": "Read public sources",
@@ -149,9 +151,9 @@ def test_hermes_approval_controls_enable_only_for_real_pending_plan(qapp, window
     qapp.processEvents()
 
     assert commands == [
-        "approve Hermes task current",
-        "deny Hermes task current",
-        "cancel Hermes task current",
+        f"approve Hermes task {task_id}",
+        f"deny Hermes task {task_id}",
+        f"cancel Hermes task {task_id}",
     ]
 
 

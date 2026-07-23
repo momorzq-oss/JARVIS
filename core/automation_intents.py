@@ -203,7 +203,7 @@ def classify_browser_intent(text, state=None):
         return None
     if re.fullmatch(r"search google(?: for)? .+", low):
         return None
-    if re.match(r"(?:find|locate|search for) (?:the )?file\b", low):
+    if re.match(r"(?:find|locate|search for) (?:a |the )?file\b", low):
         return None
     if re.fullmatch(r"play (?:the )?first (?:result|video)", low):
         return None
@@ -758,6 +758,49 @@ def classify_local_intent(text, state=None):
         return {"skill": "task.resume", "params": {}}
     if re.fullmatch(r"(?:cancel|stop)(?: (?:typing|the task|the current task))?", low):
         return {"skill": "task.cancel", "params": {}}
+
+    # Voice lifecycle commands use the same deterministic route as typed and
+    # transcribed input.  GUI buttons call these controller methods directly,
+    # but voice/typed commands must not fall through to the cloud chat router.
+    if re.fullmatch(
+        r"(?:start|begin|turn on|enable) (?:the )?(?:jarvis )?(?:voice|listening|microphone)",
+        low,
+    ):
+        return {"skill": "system.voice_start", "params": {}}
+    if re.fullmatch(
+        r"(?:stop|end|turn off|disable) (?:the )?(?:jarvis )?(?:voice|listening|microphone)",
+        low,
+    ):
+        return {"skill": "system.voice_stop", "params": {}}
+
+    # Searching for a local file is not a web search.  Resolve it before the
+    # browser classifier sees the generic word "search"; execution remains
+    # behind the registered JARVIS file-search capability.
+    file_search = re.fullmatch(
+        r"(?:find|locate|search(?: for)?|look for) (?:a |the )?"
+        r"(?:file|document)(?: (?:named|called))?(?: (.*))?",
+        low,
+    )
+    if file_search:
+        return {
+            "skill": "app.search_file",
+            "params": {"target": (file_search.group(1) or "").strip(" .!?\"'")},
+        }
+
+    # A background request is an orchestration request, not a normal report
+    # action.  Preserve the user's goal and let the Hermes/JARVIS boundary
+    # decide whether it can be planned or must fall back safely.
+    background_requested = bool(re.search(r"\bbackground\b", low))
+    if background_requested:
+        topic = _research_topic(request, state)
+        if topic or re.search(r"\b(?:run|do|start|continue)\s+(?:this|that|it)\b", low):
+            goal = request
+            if topic:
+                goal = re.sub(r"\s+(?:in|on)\s+the\s+background\b.*$", "", goal, flags=re.I).strip(" .")
+            return {
+                "skill": "hermes.plan",
+                "params": {"goal": goal, "background_requested": True},
+            }
 
     whatsapp = _classify_whatsapp_intent(request, state)
     if whatsapp is not None:

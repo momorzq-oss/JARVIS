@@ -23,6 +23,8 @@ CASES = [
     ("Could you tell me the current time?", "smalltalk", {"kind": "time"}),
     ("time please", "smalltalk", {"kind": "time"}),
     ("what is the date", "smalltalk", {"kind": "date"}),
+    ("what is the date today", "smalltalk", {"kind": "date"}),
+    ("could you tell me the current day now", "smalltalk", {"kind": "date"}),
     ("tell me the date", "smalltalk", {"kind": "date"}),
     ("Please tell me the date.", "smalltalk", {"kind": "date"}),
     ("pause the music", "media.control", {"action": "pause"}),
@@ -48,6 +50,9 @@ CASES = [
     ("thanks Jarvis", "smalltalk", {"kind": "thanks"}),
     ("how are you doing", "smalltalk", {"kind": "howareyou"}),
     ("good night Jarvis", "smalltalk", {"kind": "goodbye"}),
+    ("start voice", "system.voice_start", {}),
+    ("stop listening", "system.voice_stop", {}),
+    ("start the microphone", "system.voice_start", {}),
 ]
 
 

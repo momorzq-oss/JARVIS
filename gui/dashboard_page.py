@@ -49,9 +49,9 @@ class DashboardPage(QWidget):
     closeApplicationRequested = Signal(str)
     focusApplicationRequested = Signal(str)
     closeAllRequested = Signal()
-    hermesApproveRequested = Signal()
-    hermesDenyRequested = Signal()
-    hermesCancelRequested = Signal()
+    hermesApproveRequested = Signal(str)
+    hermesDenyRequested = Signal(str)
+    hermesCancelRequested = Signal(str)
 
     def __init__(self, reduced_motion=False, parent=None):
         super().__init__(parent)

@@ -230,6 +230,18 @@ def _dispatch_registered(intent, ctx):
         ctx.speaker.stop()
         return None
 
+    if skill in {"system.voice_start", "system.voice_stop"}:
+        controller = getattr(ctx, "assistant_controller", None)
+        if controller is None:
+            return "Voice control is unavailable because the JARVIS controller is not running."
+        if skill == "system.voice_start":
+            return ("Voice listening started, sir."
+                    if controller.start_voice()
+                    else "Voice listening could not start; check the microphone and wake-word model.")
+        return ("Voice listening stopped, sir."
+                if controller.stop_voice()
+                else "Voice listening is already stopped, sir.")
+
     if skill == "system.emergency_stop":
         # Signal cancellation and silence output before any optional subsystem
         # cleanup.  Emergency stop must not wait behind browser or UI work.

@@ -330,9 +330,9 @@ class ReasoningPanel(HudPanel):
 
 
 class HermesPanel(HudPanel):
-    approveRequested = Signal()
-    denyRequested = Signal()
-    cancelRequested = Signal()
+    approveRequested = Signal(str)
+    denyRequested = Signal(str)
+    cancelRequested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__("Hermes Orchestrator", parent, compact=True)
@@ -348,6 +348,7 @@ class HermesPanel(HudPanel):
         self.retries = _value_label("0")
         self.confirmations = _value_label("0")
         self.output = _value_label("Unavailable")
+        self._task_id = ""
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         form.addRow("STATE", self.status)
@@ -370,9 +371,15 @@ class HermesPanel(HudPanel):
         self.deny_button.setObjectName("hermesDeny")
         self.cancel_button = QPushButton("CANCEL TASK")
         self.cancel_button.setObjectName("danger")
-        self.approve_button.clicked.connect(self.approveRequested)
-        self.deny_button.clicked.connect(self.denyRequested)
-        self.cancel_button.clicked.connect(self.cancelRequested)
+        self.approve_button.clicked.connect(
+            lambda: self.approveRequested.emit(self._task_id)
+        )
+        self.deny_button.clicked.connect(
+            lambda: self.denyRequested.emit(self._task_id)
+        )
+        self.cancel_button.clicked.connect(
+            lambda: self.cancelRequested.emit(self._task_id)
+        )
         for button in (self.approve_button, self.deny_button, self.cancel_button):
             controls.addWidget(button)
         self.content.addLayout(controls)
@@ -382,6 +389,7 @@ class HermesPanel(HudPanel):
 
     def set_snapshot(self, snapshot):
         snapshot = snapshot if isinstance(snapshot, dict) else {}
+        self._task_id = str(snapshot.get("hermes_task_id") or "")
         self.status.setText(normalize_state(snapshot.get("hermes", "Disabled")))
         self.task.setText(snapshot.get("hermes_task") or "Unavailable")
         self.task_status.setText(normalize_state(snapshot.get("hermes_task_status", "Idle")))
@@ -398,9 +406,9 @@ class HermesPanel(HudPanel):
         self.output.setText(str(snapshot.get("hermes_output") or "Unavailable"))
         approval_pending = bool(snapshot.get("hermes_approval_pending"))
         task_state = str(snapshot.get("hermes_task_status") or "").upper()
-        self.approve_button.setEnabled(approval_pending)
-        self.deny_button.setEnabled(approval_pending)
-        self.cancel_button.setEnabled(task_state in {
+        self.approve_button.setEnabled(bool(self._task_id) and approval_pending)
+        self.deny_button.setEnabled(bool(self._task_id) and approval_pending)
+        self.cancel_button.setEnabled(bool(self._task_id) and task_state in {
             "QUEUED", "PLANNING", "WAITING_CONFIRMATION", "RUNNING",
             "PAUSED", "RETRYING", "ROLLING_BACK",
         })

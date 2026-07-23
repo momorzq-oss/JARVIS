@@ -249,6 +249,9 @@ class AssistantController:
             displayed_hermes = (
                 displayed_record.__dict__.copy() if displayed_record else None
             )
+            snap["hermes_task_id"] = (
+                displayed_hermes["task_id"] if displayed_hermes else ""
+            )
             snap["hermes_task"] = displayed_hermes["goal"] if displayed_hermes else "Unavailable"
             snap["hermes_task_status"] = displayed_hermes["status"] if displayed_hermes else "IDLE"
             snap["hermes_steps"] = (f"{displayed_hermes['current_step']}/{displayed_hermes['total_steps']}"

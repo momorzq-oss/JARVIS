@@ -96,18 +96,24 @@ class LLM:
         if not self.available:
             return False, self.model, "OPENROUTER_API_KEY not set"
         try:
-            from openai import OpenAI
-            import httpx
-            client = OpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url,
-                default_headers={
-                    "HTTP-Referer": "https://jarvis.local",
-                    "X-Title": "JARVIS Desktop Assistant",
-                },
-                timeout=15.0,
-                http_client=httpx.Client(timeout=15.0, follow_redirects=True),
-            )
+            # Reuse an initialized provider client when one exists.  Apart
+            # from avoiding an unnecessary second connection setup, this
+            # keeps the diagnostic on the same configured transport as chat
+            # and makes its error handling deterministic for callers.
+            client = self._client
+            if client is None:
+                from openai import OpenAI
+                import httpx
+                client = OpenAI(
+                    api_key=self.api_key,
+                    base_url=self.base_url,
+                    default_headers={
+                        "HTTP-Referer": "https://jarvis.local",
+                        "X-Title": "JARVIS Desktop Assistant",
+                    },
+                    timeout=15.0,
+                    http_client=httpx.Client(timeout=15.0, follow_redirects=True),
+                )
             resp = client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": "ping"}],

@@ -159,6 +159,32 @@ def test_folder_and_application_aliases_share_one_route(phrase, skill):
     assert ctx.router.calls == 0
 
 
+@pytest.mark.parametrize(
+    ("phrase", "target"),
+    (
+        ("Search for a file", ""),
+        ("Find the document named quarterly report", "quarterly report"),
+        ("Look for the file called notes.txt", "notes.txt"),
+    ),
+)
+def test_local_file_search_never_falls_into_web_search(phrase, target):
+    ctx = context()
+    route = select_route(phrase, ctx)
+    assert route["selected_engine"] == "deterministic"
+    assert route["intent"] == {
+        "skill": "app.search_file", "params": {"target": target},
+    }
+    assert ctx.router.calls == 0
+
+
+def test_background_research_uses_shared_hermes_plan_boundary():
+    route = select_route("Research renewable energy in the background", context())
+    assert route["selected_engine"] == "deterministic"
+    assert route["intent"]["skill"] == "hermes.plan"
+    assert route["intent"]["params"]["background_requested"] is True
+    assert "in the background" not in route["intent"]["params"]["goal"].lower()
+
+
 def test_explicit_windows_folder_path_outranks_alias_inside_path():
     path = r"C:\Users\Burab\OneDrive\Desktop\JARVIS\.test_tmp\folder probe"
     route = select_route(f"Please show me the folder {path}", context())

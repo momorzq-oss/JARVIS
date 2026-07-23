@@ -73,7 +73,7 @@ FAST_RULES = [
     # conversational provider, Hermes, or the network is unavailable.
     (_rgx(r"^(?:(?:jarvis)[, ]*)?(?:(?:what(?:'s| is)|can you tell me|tell me|give me|do you know) (?:the )?(?:current )?time(?: now)?|what time is it(?: now)?|time please|current time)[.!? ]*$"),
      lambda m: {"skill": "smalltalk", "params": {"kind": "time"}}),
-    (_rgx(r"^(?:(?:jarvis)[, ]*)?(?:(?:what(?:'s| is)|can you tell me|tell me) (?:the )?(?:date|day|today)|what day is (?:it|today))[.!? ]*$"),
+    (_rgx(r"^(?:(?:jarvis)[, ]*)?(?:(?:what(?:'s| is)|can you tell me|tell me|give me|do you know) (?:the )?(?:current )?(?:date|day)(?: (?:today|now))?|what (?:is )?(?:the )?(?:current )?(?:date|day) (?:today|now|is it)|what day is (?:it|today))[.!? ]*$"),
      lambda m: {"skill": "smalltalk", "params": {"kind": "date"}}),
 
     # --- music ------------------------------------------------------------------
@@ -267,7 +267,7 @@ VALID_SKILLS = {
     "hermes.status", "hermes.tasks", "hermes.plan", "hermes.pause",
     "hermes.resume", "hermes.cancel", "hermes.approve", "hermes.deny",
     "window.front", "window.minimize", "window.maximize", "window.restore", "window.focus", "window.close",
-    "system.emergency_stop", "office.create_document", "office.create_spreadsheet",
+    "system.emergency_stop", "system.voice_start", "system.voice_stop", "office.create_document", "office.create_spreadsheet",
     "office.create_presentation", "office.save", "office.export",
     "browser.back", "browser.forward", "browser.new_tab", "browser.close_tab",
     "browser.switch_tab", "browser.read_page", "browser.find_on_page",

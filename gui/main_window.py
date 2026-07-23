@@ -352,7 +352,7 @@ class MainWindow(QWidget):
         self.memory_page.add_task_event(stage, text)
         if stage == "cleaned":
             self.dashboard.conversation.set_cleaned(text)
-            self.dashboard.reasoning.set_goal(text)
+            self.dashboard.reasoning.begin_goal(text)
         elif stage in {"planned", "planner_step"}:
             self.dashboard.reasoning.set_planner(
                 "OpenRouter Safety" if "safeguard" in text.lower() else "Backend planner"
@@ -362,7 +362,21 @@ class MainWindow(QWidget):
             "validated", "executing", "confirmation_requested", "confirmation_result",
             "step_started", "step_completed", "step_failed", "retry", "rollback",
         }:
+            if (
+                stage == "validated"
+                and self.dashboard.reasoning.values["planner"].text()
+                in {"Waiting", "Unavailable"}
+            ):
+                self.dashboard.reasoning.set_planner("Deterministic router")
             self._apply_structured_timeline(stage, text)
+        elif stage == "completed":
+            self.dashboard.reasoning.set_step("Completed")
+            self.dashboard.reasoning.set_recovery("Not required")
+        elif stage == "cancelled":
+            self.dashboard.reasoning.set_step("Cancelled")
+            self.dashboard.reasoning.set_recovery("Cancelled safely")
+        elif stage == "failed":
+            self.dashboard.reasoning.set_step("Failed")
         if stage in {"failed", "step_failed"}:
             self.dashboard.reasoning.set_recovery("Failure reported by backend")
         elif stage in {"retry", "rollback"}:

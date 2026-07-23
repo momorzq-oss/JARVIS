@@ -162,6 +162,25 @@ def test_task_snapshot_drives_progress_and_controls(window):
     assert window.fields["app"].text() == "Microsoft Word"
 
 
+def test_execution_summary_resets_and_reaches_terminal_state(window):
+    action = '{"action":{"skill":"smalltalk","operation":"respond"}}'
+
+    window._slot_timeline("cleaned", "what time is it?")
+    assert window.dashboard.reasoning.values["planner"].text() == "Waiting"
+    assert window.dashboard.reasoning.values["step"].text() == "Waiting"
+    window._slot_timeline("validated", action)
+    window._slot_timeline("executing", action)
+    assert window.dashboard.reasoning.values["planner"].text() == "Deterministic router"
+    assert window.dashboard.reasoning.values["step"].text() == "Executing"
+
+    window._slot_timeline("completed", action)
+    window._slot_timeline("completed", "The current time is 2:04 PM.")
+
+    assert window.dashboard.reasoning.values["capability"].text() == "smalltalk.respond"
+    assert window.dashboard.reasoning.values["step"].text() == "Completed"
+    assert window.dashboard.reasoning.values["recovery"].text() == "Not required"
+
+
 def test_quick_actions_are_connected_to_real_handlers(window, monkeypatch):
     submitted = []
     monkeypatch.setattr(window.gc, "submit_text", submitted.append)

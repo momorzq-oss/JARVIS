@@ -307,6 +307,15 @@ class ReasoningPanel(HudPanel):
     def set_goal(self, text):
         self.values["goal"].setText(str(text or "Waiting"))
 
+    def begin_goal(self, text):
+        """Reset per-command execution fields before showing a new goal."""
+        self.set_goal(text)
+        self.set_planner("Waiting")
+        self.set_capability("Waiting")
+        self.set_step("Waiting")
+        self.values["retries"].setText("Unavailable")
+        self.set_recovery("Waiting")
+
     def set_capability(self, text):
         self.values["capability"].setText(str(text or "Waiting"))
 

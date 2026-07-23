@@ -23,6 +23,15 @@ from gui import styles
 class AICoreWidget(QWidget):
     """Procedural armored sentinel driven by real assistant state."""
 
+    ACTIVE_ANIMATION_STATES = {
+        "wake_detected", "recording", "processing", "transcribing",
+        "planning", "executing", "speaking", "waiting_confirmation",
+        "recovery",
+    }
+    ACTIVE_INTERVAL_MS = 33
+    PASSIVE_INTERVAL_MS = 500
+    REDUCED_MOTION_INTERVAL_MS = 1000
+
     STATE_COLORS = {
         "idle": styles.CYAN_DIM,
         "ready": styles.CYAN,
@@ -63,12 +72,9 @@ class AICoreWidget(QWidget):
         self._state = str(state or "idle").lower()
         if detail:
             self._detail = str(detail)
-        active = self._state in {
-            "listening_wake", "wake_detected", "recording", "processing",
-            "transcribing", "planning", "executing", "speaking",
-            "waiting_confirmation", "recovery",
-        }
-        self._timer.setInterval(500 if self._reduce_motion else (33 if active else 250))
+        active = self._state in self.ACTIVE_ANIMATION_STATES
+        interval = self.ACTIVE_INTERVAL_MS if active else self.PASSIVE_INTERVAL_MS
+        self._timer.setInterval(self.REDUCED_MOTION_INTERVAL_MS if self._reduce_motion else interval)
         self.update()
 
     def set_reduce_motion(self, enabled):
@@ -92,7 +98,7 @@ class AICoreWidget(QWidget):
 
     def _tick(self):
         speed = 0.0 if self._reduce_motion else 1.0
-        active = self._state not in {"idle", "ready", "cancelled"}
+        active = self._state in self.ACTIVE_ANIMATION_STATES
         self._phase += (0.12 if active else 0.035) * speed
         self._angle = (self._angle + (1.8 if active else 0.35) * speed) % 360
         if self._state not in {"recording", "listening_wake", "speaking"}:

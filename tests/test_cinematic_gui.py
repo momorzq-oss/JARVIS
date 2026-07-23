@@ -107,6 +107,19 @@ def test_core_motion_and_color_follow_real_state(window):
     assert window.dashboard.command_waveform._reduce_motion is True
 
 
+def test_ai_core_uses_passive_cadence_while_waiting_for_wake_word(qapp):
+    widget = AICoreWidget()
+    widget.set_state("listening_wake", "Waiting for Hey Jarvis")
+    assert widget._timer.interval() == widget.PASSIVE_INTERVAL_MS
+    assert widget._timer.interval() >= 500
+    widget.set_state("recording", "Listening to command")
+    assert widget._timer.interval() == widget.ACTIVE_INTERVAL_MS
+    widget.set_state("executing", "Running approved action")
+    assert widget._timer.interval() == widget.ACTIVE_INTERVAL_MS
+    widget.close()
+    widget.deleteLater()
+
+
 def test_ai_core_renders_armored_sentinel_geometry(qapp):
     widget = AICoreWidget()
     widget.resize(760, 760)

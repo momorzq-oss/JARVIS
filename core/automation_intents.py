@@ -674,6 +674,18 @@ def classify_local_intent(text, state=None):
             if re.search(rf"\b{re.escape(alias)}\b(?:\s+(?:folder|directory))?", low):
                 return {"skill": "app.open_folder", "params": {"target": FOLDER_ALIASES[alias]}}
 
+    interactive_research = re.fullmatch(
+        r"(?:let(?:'s| us)\s+)?(?:start|begin|create)\s+(?:a\s+)?"
+        r"(?:new\s+)?research\s+(?:project|session)\s+"
+        r"(?:about|on|regarding)\s+(.+)",
+        low,
+    )
+    if interactive_research:
+        return {
+            "skill": "research.start",
+            "params": {"topic": interactive_research.group(1).strip(" .")},
+        }
+
     # Research/document compounds must win over generic "open X" and browser
     # "watch" language.  The action remains a registered JARVIS action.
     research_signal = bool(re.search(

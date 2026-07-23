@@ -468,6 +468,26 @@ def test_natural_research_followup_remains_in_pending_research_context():
     assert route["pending_kind"] == "research"
 
 
+@pytest.mark.parametrize(
+    "phrase",
+    (
+        "Start a new research project about grid-scale battery storage.",
+        "Begin a research session on grid-scale battery storage.",
+        "Let's create a new research project regarding grid-scale battery storage.",
+    ),
+)
+def test_interactive_research_project_phrasing_stays_local(phrase):
+    ctx = context()
+
+    intent = select_route(phrase, ctx)["intent"]
+
+    assert intent == {
+        "skill": "research.start",
+        "params": {"topic": "grid-scale battery storage"},
+    }
+    assert ctx.router.calls == 0
+
+
 def test_trace_validates_without_executing_or_calling_cloud():
     ctx = context()
     trace = build_trace("Please show me my Downloads folder", ctx)

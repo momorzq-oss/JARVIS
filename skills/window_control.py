@@ -9,6 +9,42 @@ unrelated process with a similar name.
 from difflib import get_close_matches
 
 
+def _focus_owned_hwnd(hwnd):
+    """Bring one verified HWND forward and confirm Windows accepted it."""
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    foreground = int(user32.GetForegroundWindow() or 0)
+    current_thread = int(kernel32.GetCurrentThreadId())
+    target_thread = int(user32.GetWindowThreadProcessId(hwnd, None) or 0)
+    foreground_thread = int(
+        user32.GetWindowThreadProcessId(foreground, None) or 0
+    ) if foreground else 0
+    attached = []
+    try:
+        for source, target in (
+            (current_thread, foreground_thread),
+            (current_thread, target_thread),
+        ):
+            if (source and target and source != target
+                    and user32.AttachThreadInput(source, target, True)):
+                attached.append((source, target))
+        # Preserve a maximized/normal window; only restore an iconic one.
+        if user32.IsIconic(hwnd):
+            user32.ShowWindowAsync(hwnd, 9)
+        user32.BringWindowToTop(hwnd)
+        flags = 0x0001 | 0x0002 | 0x0040  # NOSIZE | NOMOVE | SHOWWINDOW
+        user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, flags)
+        user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, flags)
+        user32.SetForegroundWindow(hwnd)
+        user32.SetFocus(hwnd)
+    finally:
+        for source, target in reversed(attached):
+            user32.AttachThreadInput(source, target, False)
+    return int(user32.GetForegroundWindow() or 0) == int(hwnd)
+
+
 def _show_owned_window(entry, verb):
     """Use non-blocking Win32 state changes for a verified registry HWND."""
     hwnd = int((entry or {}).get("hwnd") or (entry or {}).get("window_handle") or 0)
@@ -22,9 +58,9 @@ def _show_owned_window(entry, verb):
         command = commands.get(verb)
         if command is None:
             return False
-        ctypes.windll.user32.ShowWindowAsync(hwnd, command)
         if verb == "focus":
-            ctypes.windll.user32.SetForegroundWindow(hwnd)
+            return _focus_owned_hwnd(hwnd)
+        ctypes.windll.user32.ShowWindowAsync(hwnd, command)
         return True
     except Exception:
         return False

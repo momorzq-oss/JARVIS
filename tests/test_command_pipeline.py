@@ -340,6 +340,41 @@ def test_office_creation_strips_polite_request_scaffolding_consistently():
     assert document["params"]["topic"] == "regional transport"
 
 
+def test_exact_office_product_nouns_keep_flexible_creation_verbs():
+    spreadsheet = select_route(
+        "Prepare an Excel spreadsheet for quarterly expenses", context(),
+    )["intent"]
+    presentation = select_route(
+        "Prepare a five-slide PowerPoint presentation about safe local AI",
+        context(),
+    )["intent"]
+
+    assert spreadsheet["skill"] == "office.create_spreadsheet"
+    assert spreadsheet["params"]["topic"] == "quarterly expenses"
+    assert presentation["skill"] == "office.create_presentation"
+    assert presentation["params"]["topic"] == "safe local AI"
+    assert presentation["params"]["slides"] == 5
+
+
+@pytest.mark.parametrize(
+    ("phrase", "skill"),
+    [
+        ("Minimize it", "window.minimize"),
+        ("Maximize that window", "window.maximize"),
+        ("Restore the current window", "window.restore"),
+        ("Bring it to the front", "window.front"),
+        ("Focus on this window", "window.focus"),
+    ],
+)
+def test_window_followups_resolve_active_application(phrase, skill):
+    ctx = context()
+    ctx.state["command_context"] = {"current_application": "Calculator"}
+
+    assert select_route(phrase, ctx)["intent"] == {
+        "skill": skill, "params": {"target": "Calculator"},
+    }
+
+
 def test_natural_research_followup_remains_in_pending_research_context():
     ctx = context(pending={"kind": "research"})
     route = select_route("What sources have we gathered?", ctx)

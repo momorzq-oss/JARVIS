@@ -496,8 +496,6 @@ def _classify_office_creation(request):
     if not creation:
         return None
     if any(noun in low for noun in ("spreadsheet", "workbook", "budget", "tracker", "expense sheet")):
-        if re.search(r"\b(?:microsoft\s+)?excel\s+(?:spreadsheet|file)\b", low):
-            return None
         topic = _extract_topic(value, (r"\b(?:about|for|on)\b",))
         if not topic:
             topic = re.sub(
@@ -512,8 +510,6 @@ def _classify_office_creation(request):
             mode=_mode(value), save_after_completion=True,
         )
     if any(noun in low for noun in ("presentation", "slides", "slide deck", "pitch deck")):
-        if re.search(r"\b(?:microsoft\s+)?powerpoint\s+(?:presentation|file)\b", low):
-            return None
         topic = _extract_topic(value, (r"\b(?:about|for|on)\b",)) or "Presentation"
         slide_match = re.search(
             r"\b(\d{1,2}|" + "|".join(NUMBER_WORDS) + r")[- ]slide", low,
@@ -580,6 +576,33 @@ def classify_local_intent(text, state=None):
         return {"skill": "task.cancel", "params": {}}
 
     context = state.get("command_context", {}) if isinstance(state, dict) else {}
+
+    # Window pronouns resolve through the same compact command context used by
+    # close and Office follow-ups.  Legacy regexes otherwise pass literal
+    # targets such as "it" or "current window" to the window scanner.
+    active_application = str(context.get("current_application") or "").strip()
+    if active_application:
+        relative_target = (
+            r"(?:it|this|that|this window|that window|the window|"
+            r"current window|the current window|the app|the application)"
+        )
+        state_action = re.fullmatch(
+            rf"(minimize|maximize|restore)\s+(?:the\s+)?({relative_target})",
+            low,
+        )
+        if state_action:
+            return {
+                "skill": f"window.{state_action.group(1)}",
+                "params": {"target": active_application},
+            }
+        if re.fullmatch(
+            rf"(?:bring|switch)\s+(?:to\s+)?(?:the\s+)?{relative_target}"
+            rf"(?:\s+to\s+(?:the\s+)?front|\s+up)?",
+            low,
+        ):
+            return {"skill": "window.front", "params": {"target": active_application}}
+        if re.fullmatch(rf"focus(?:\s+on)?\s+(?:the\s+)?{relative_target}", low):
+            return {"skill": "window.focus", "params": {"target": active_application}}
 
     # Close commands precede open/create/search commands.
     if re.fullmatch(r"(?:close|shut|exit|quit) (?:(?:this|the|current)\s+)*tab", low):

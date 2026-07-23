@@ -77,8 +77,8 @@ def test_youtube_commands_have_exact_routes():
 
 def test_office_and_research_commands_have_exact_routes():
     assert fast_lane("Create a Word document about therapy.")["skill"] == "word.write"
-    assert fast_lane("Create an Excel spreadsheet about expenses.")["skill"] == "excel.create"
-    assert fast_lane("Create a PowerPoint presentation about safety.")["skill"] == "ppt.create"
+    assert fast_lane("Create an Excel spreadsheet about expenses.")["skill"] == "office.create_spreadsheet"
+    assert fast_lane("Create a PowerPoint presentation about safety.")["skill"] == "office.create_presentation"
     assert fast_lane("Create a research report about therapy.")["skill"] == "research.create_report"
 
 

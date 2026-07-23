@@ -101,6 +101,71 @@ def test_verified_registry_hwnd_uses_nonblocking_native_window_action(monkeypatc
     assert calls == [(456, "maximize")]
 
 
+def test_owned_focus_confirms_foreground_and_preserves_maximized_state(monkeypatch):
+    import ctypes
+    from types import SimpleNamespace
+
+    events = []
+
+    class User32:
+        foreground = 100
+
+        @staticmethod
+        def IsWindow(_hwnd):
+            return True
+
+        @staticmethod
+        def IsIconic(_hwnd):
+            return False
+
+        @staticmethod
+        def GetForegroundWindow():
+            return User32.foreground
+
+        @staticmethod
+        def GetWindowThreadProcessId(hwnd, _pid):
+            return 20 if hwnd == 456 else 10
+
+        @staticmethod
+        def AttachThreadInput(source, target, attach):
+            events.append(("attach", source, target, bool(attach)))
+            return True
+
+        @staticmethod
+        def ShowWindowAsync(*_args):
+            raise AssertionError("maximized window was restored")
+
+        @staticmethod
+        def BringWindowToTop(hwnd):
+            events.append(("top", hwnd))
+            return True
+
+        @staticmethod
+        def SetWindowPos(*args):
+            events.append(("position", args[0], args[1]))
+            return True
+
+        @staticmethod
+        def SetForegroundWindow(hwnd):
+            User32.foreground = hwnd
+            return True
+
+        @staticmethod
+        def SetFocus(hwnd):
+            events.append(("focus", hwnd))
+            return hwnd
+
+    fake_windll = SimpleNamespace(
+        user32=User32(),
+        kernel32=SimpleNamespace(GetCurrentThreadId=lambda: 1),
+    )
+    monkeypatch.setattr(ctypes, "windll", fake_windll)
+
+    assert window_control._show_owned_window({"hwnd": 456}, "focus") is True
+    assert User32.foreground == 456
+    assert ("focus", 456) in events
+
+
 def test_window_front_requires_target():
     ctx = type("C", (), {"registry": None})()
     assert window_control.bring_to_front("", ctx) == "Bring what to the front, sir?"

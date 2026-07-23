@@ -335,7 +335,12 @@ class AssistantController:
                 request, payload, task_id=task.task_id,
             )
         except Exception as exc:
-            self.hermes_tasks.transition(task.task_id, "FAILED", error=str(exc))
+            current = self.hermes_tasks.get(task.task_id)
+            # A pre-emptive GUI/voice cancellation terminates the owned CLI
+            # process.  When that blocked call unwinds, its expected exception
+            # must not rewrite the already-terminal CANCELLED state as FAILED.
+            if current is None or not current.cancellation_token:
+                self.hermes_tasks.transition(task.task_id, "FAILED", error=str(exc))
             raise
         self._emit("status", self.status_snapshot())
         return request, plan, task
@@ -424,6 +429,116 @@ class AssistantController:
         )
         self._emit("status", self.status_snapshot())
         return outcome
+
+    def _select_hermes_task(self, selector="current"):
+        tasks = sorted(self.hermes_tasks.list(), key=lambda item: item.created_at)
+        if not tasks:
+            return None
+        value = str(selector or "current").strip().lower()
+        active = [
+            task for task in tasks
+            if task.status not in {"COMPLETED", "FAILED", "CANCELLED"}
+        ]
+        if value in {"", "current", "active", "running", "latest", "last"}:
+            return (active or tasks)[-1]
+        numbers = {
+            "one": 1, "first": 1, "two": 2, "second": 2,
+            "three": 3, "third": 3, "four": 4, "fourth": 4,
+        }
+        try:
+            index = numbers.get(value, int(value) if value.isdigit() else 0)
+        except (TypeError, ValueError):
+            index = 0
+        if 1 <= index <= len(tasks):
+            return tasks[index - 1]
+        exact = next((task for task in tasks if task.task_id == value), None)
+        return exact
+
+    def _hermes_status_text(self):
+        snapshot = self.status_snapshot()
+        state = str(snapshot.get("hermes") or "unavailable").replace("_", " ")
+        detail = str(snapshot.get("hermes_detail") or "").strip()
+        task = str(snapshot.get("hermes_task") or "Unavailable")
+        task_state = str(snapshot.get("hermes_task_status") or "IDLE")
+        return (
+            f"Hermes is {state}. {detail}. "
+            f"The displayed task is {task}, with status {task_state}."
+        )
+
+    def _hermes_tasks_text(self):
+        tasks = sorted(self.hermes_tasks.list(), key=lambda item: item.created_at)
+        if not tasks:
+            return "Hermes has no recorded tasks."
+        parts = []
+        for index, task in enumerate(tasks, 1):
+            progress = round(float(task.progress or 0.0) * 100)
+            parts.append(
+                f"Task {index}, {task.goal}, is {task.status.lower()} at {progress} percent"
+            )
+        return "Hermes tasks: " + "; ".join(parts) + "."
+
+    def handle_hermes_intent(self, skill, params=None):
+        """Handle registered Hermes commands without bypassing JARVIS policy."""
+        params = dict(params or {})
+        if skill == "hermes.status":
+            return self._hermes_status_text()
+        if skill == "hermes.tasks":
+            return self._hermes_tasks_text()
+        if skill == "hermes.plan":
+            goal = str(params.get("goal") or "").strip()
+            if not goal:
+                return "Please give Hermes a specific goal to plan."
+            if len(goal) > 4000:
+                return "That Hermes goal is too long. Please keep it under 4,000 characters."
+            if not self.hermes_adapter.enabled or self.hermes_adapter.mode != "cli":
+                return (
+                    "Hermes planning is disabled. Enable the external Hermes engine "
+                    "in Settings after its provider is configured. Normal JARVIS commands remain available."
+                )
+            try:
+                _request, plan, task = self.plan_hermes_task(goal, goal)
+            except Exception as exc:
+                safe = self.action_manager._redact_text(exc)
+                return f"Hermes could not prepare the plan: {safe}. No action was executed."
+            capabilities = ", ".join(
+                dict.fromkeys(step["capability_id"] for step in plan["steps"])
+            ) or "none"
+            summary = str(plan.get("summary") or "Plan prepared").strip()[:500]
+            background_note = " Background execution remains disabled." if (
+                params.get("background_requested")
+                and not Config.HERMES_BACKGROUND_TASKS_ENABLED
+            ) else ""
+            return (
+                f"Hermes prepared a {len(plan['steps'])}-step plan for task "
+                f"{task.task_id}: {summary}. Requested capabilities: {capabilities}. "
+                f"The plan is waiting for JARVIS approval and nothing has executed."
+                f"{background_note}"
+            )
+
+        task = self._select_hermes_task(params.get("task"))
+        if task is None:
+            return "I could not find that Hermes task."
+        if skill == "hermes.pause":
+            if task.status not in {"RUNNING", "RETRYING"}:
+                return f"Hermes task {task.task_id} cannot be paused while it is {task.status.lower()}."
+            updated = self.hermes_tasks.pause(task.task_id)
+            self._emit("status", self.status_snapshot())
+            return f"Hermes task {updated.task_id} is paused."
+        if skill == "hermes.resume":
+            if task.status != "PAUSED":
+                return f"Hermes task {task.task_id} is not paused; it is {task.status.lower()}."
+            updated = self.hermes_tasks.resume(task.task_id)
+            self._emit("status", self.status_snapshot())
+            return f"Hermes task {updated.task_id} resumed."
+        if skill == "hermes.cancel":
+            if task.status in {"COMPLETED", "FAILED", "CANCELLED"}:
+                return f"Hermes task {task.task_id} is already {task.status.lower()}."
+            if task.status == "PLANNING":
+                self.hermes_adapter.cancel()
+            updated = self.hermes_tasks.cancel(task.task_id)
+            self._emit("status", self.status_snapshot())
+            return f"Hermes task {updated.task_id} was cancelled."
+        return "That Hermes command is not registered."
 
     def preload_models(self):
         if self.skip_preload:

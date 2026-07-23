@@ -387,6 +387,37 @@ def test_hermes_planning_failure_is_retained_as_failed_task():
     assert tasks[0].last_error == "provider rate limited"
 
 
+def test_cancelled_hermes_planning_is_not_rewritten_as_failed():
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    record = type("Record", (), {
+        "capability_id": "research.search_web", "status": "WORKING",
+        "connected": True, "permission": "BROWSER_NAVIGATE", "risk": "low",
+    })()
+    ctl.capability_registry = type("Registry", (), {
+        "snapshot": lambda self: [record],
+    })()
+    ctl.hermes_orchestrator.registry = ctl.capability_registry
+    ctl.hermes_adapter.enabled = True
+    ctl.hermes_adapter.mode = "cli"
+
+    def cancel_while_planning(_request):
+        task = ctl.hermes_tasks.list()[0]
+        ctl.hermes_tasks.cancel(task.task_id)
+        raise HermesAdapterError("request cancelled")
+
+    ctl.hermes_adapter.plan = cancel_while_planning
+
+    with pytest.raises(HermesAdapterError, match="cancelled"):
+        ctl.plan_hermes_task(
+            "research", "research public sources",
+            [{"capability_id": "research.search_web"}],
+        )
+
+    task = ctl.hermes_tasks.list()[0]
+    assert task.status == "CANCELLED"
+    assert task.cancellation_token is True
+
+
 def test_hermes_step_execution_requires_verified_action_result(monkeypatch):
     ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
     monkeypatch.setattr(
@@ -416,3 +447,83 @@ def test_hermes_word_output_path_is_restricted_to_temp(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="outside the approved"):
         AssistantController._validate_hermes_step_parameters(step)
+
+
+def test_hermes_plan_command_fails_closed_while_disabled(monkeypatch):
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    called = []
+    monkeypatch.setattr(
+        ctl, "plan_hermes_task", lambda *args, **kwargs: called.append(args),
+    )
+
+    result = ctl.handle_hermes_intent(
+        "hermes.plan", {"goal": "research renewable energy"},
+    )
+
+    assert "disabled" in result.lower()
+    assert "normal jarvis commands remain available" in result.lower()
+    assert called == []
+
+
+def test_hermes_plan_command_reports_plan_without_execution(monkeypatch):
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    ctl.hermes_adapter.enabled = True
+    ctl.hermes_adapter.mode = "cli"
+    plan = {
+        "summary": "Use approved public research tools",
+        "steps": [
+            {"capability_id": "research.search_web"},
+            {"capability_id": "research.read_source"},
+        ],
+    }
+    task = type("Task", (), {"task_id": "safe-task-id"})()
+    monkeypatch.setattr(
+        ctl, "plan_hermes_task",
+        lambda goal, request: (object(), plan, task),
+    )
+    executed = []
+    monkeypatch.setattr(
+        ctl, "run_approved_hermes_plan",
+        lambda *args, **kwargs: executed.append((args, kwargs)),
+    )
+
+    result = ctl.handle_hermes_intent(
+        "hermes.plan",
+        {"goal": "research renewable energy", "background_requested": True},
+    )
+
+    assert "2-step plan" in result
+    assert "waiting for JARVIS approval" in result
+    assert "nothing has executed" in result
+    assert "Background execution remains disabled" in result
+    assert executed == []
+
+
+def test_hermes_task_controls_change_only_selected_task(monkeypatch):
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    first = ctl.hermes_tasks.create("first goal")
+    ctl.hermes_tasks.transition(first.task_id, "RUNNING")
+    second = ctl.hermes_tasks.create("second goal")
+    ctl.hermes_tasks.transition(second.task_id, "RUNNING")
+
+    paused = ctl.handle_hermes_intent("hermes.pause", {"task": "one"})
+    cancelled = ctl.handle_hermes_intent("hermes.cancel", {"task": "2"})
+
+    assert "paused" in paused.lower()
+    assert ctl.hermes_tasks.get(first.task_id).status == "PAUSED"
+    assert "cancelled" in cancelled.lower()
+    assert ctl.hermes_tasks.get(second.task_id).status == "CANCELLED"
+
+
+def test_planning_task_cancel_stops_exact_adapter_request(monkeypatch):
+    ctl = AssistantController(ctx=make_ctx(), skip_preload=True)
+    task = ctl.hermes_tasks.create("planning goal")
+    ctl.hermes_tasks.transition(task.task_id, "PLANNING")
+    cancelled = []
+    monkeypatch.setattr(ctl.hermes_adapter, "cancel", lambda: cancelled.append(True))
+
+    result = ctl.handle_hermes_intent("hermes.cancel", {"task": "current"})
+
+    assert cancelled == [True]
+    assert ctl.hermes_tasks.get(task.task_id).status == "CANCELLED"
+    assert "cancelled" in result.lower()

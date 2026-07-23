@@ -518,6 +518,82 @@ def _classify_whatsapp_intent(text, state=None):
     return None
 
 
+def _classify_hermes_intent(text):
+    """Extract Hermes status, planning, and task-control requests locally.
+
+    Hermes is an optional planner, never the command router itself.  These
+    intents therefore carry only a goal or task selector; execution remains
+    behind the normal JARVIS action manager and controller boundary.
+    """
+    request = _strip_request_scaffolding(text).strip()
+    low = request.lower().strip(" .!?")
+    if not low:
+        return None
+
+    goal_match = re.match(r"^/(goal|background)\s+(.+)$", request, re.I)
+    if goal_match:
+        goal = goal_match.group(2).strip(" .!?\t\r\n")
+        if goal:
+            return {
+                "skill": "hermes.plan",
+                "params": {
+                    "goal": goal,
+                    "background_requested": goal_match.group(1).lower() == "background",
+                },
+            }
+
+    if re.fullmatch(
+        r"(?:hermes[, ]+)?(?:are you|is hermes)\s+"
+        r"(?:connected|online|running|available)|"
+        r"(?:show|give|tell)(?: me)?(?: the)? hermes (?:status|health)|"
+        r"what(?:'s| is) (?:the )?hermes (?:status|health)",
+        low,
+    ):
+        return {"skill": "hermes.status", "params": {}}
+
+    if re.fullmatch(
+        r"what(?:'s| is) hermes (?:doing|working on)|"
+        r"(?:show|list)(?: me)? (?:the )?(?:hermes )?tasks|"
+        r"what (?:hermes )?tasks are (?:running|active)|"
+        r"what tasks are running",
+        low,
+    ):
+        return {"skill": "hermes.tasks", "params": {}}
+
+    control = re.fullmatch(
+        r"(pause|resume|continue|cancel|stop)\s+"
+        r"(?:hermes(?:'s)?\s+)?task(?:\s+(?:number\s+)?)?(.+)?",
+        low,
+    )
+    if control:
+        action = control.group(1)
+        operation = {
+            "continue": "resume", "stop": "cancel",
+        }.get(action, action)
+        selector = (control.group(2) or "current").strip()
+        return {
+            "skill": f"hermes.{operation}",
+            "params": {"task": selector},
+        }
+
+    planning_patterns = (
+        r"^(?:ask|tell|have) hermes to\s+(.+)$",
+        r"^(?:give|assign) hermes (?:a )?task(?: to)?\s+(.+)$",
+        r"^hermes[, ]+(?:please\s+)?(?:plan|research|prepare|create|do)\s+(.+)$",
+        r"^(?:use|with) hermes(?: to|,)?\s+(.+)$",
+    )
+    for pattern in planning_patterns:
+        match = re.match(pattern, request, re.I)
+        if match:
+            goal = match.group(1).strip(" .!?\t\r\n")
+            if goal:
+                return {
+                    "skill": "hermes.plan",
+                    "params": {"goal": goal, "background_requested": False},
+                }
+    return None
+
+
 def _extract_explicit_windows_path(text):
     """Return a literal drive or UNC path embedded in command prose.
 
@@ -655,6 +731,10 @@ def classify_local_intent(text, state=None):
     low = request.lower().strip(" .!?")
     if not low:
         return None
+
+    hermes = _classify_hermes_intent(request)
+    if hermes is not None:
+        return hermes
 
     # University work has one semantic extractor and one registered execution
     # route. It precedes generic report/research rules so citation style, word

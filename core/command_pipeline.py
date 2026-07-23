@@ -10,6 +10,7 @@ PREEMPT_PENDING_PREFIXES = (
     "system.", "task.", "app.", "window.", "browser.", "web.",
     "office.", "office_word.", "word.", "excel.", "ppt.",
     "university.",
+    "hermes.",
 )
 
 

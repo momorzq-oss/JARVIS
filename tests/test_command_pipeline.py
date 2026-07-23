@@ -668,3 +668,52 @@ def test_emergency_dispatch_cancels_controller_owned_hermes_adapter():
 
     assert stopped == ["speech", "controller", "browser"]
     assert result.startswith("Emergency stop completed")
+
+
+@pytest.mark.parametrize(("phrase", "skill"), [
+    ("Hermes, are you connected?", "hermes.status"),
+    ("Show me the Hermes health", "hermes.status"),
+    ("What is Hermes doing?", "hermes.tasks"),
+    ("What tasks are running?", "hermes.tasks"),
+    ("Pause task one", "hermes.pause"),
+    ("Continue Hermes task 2", "hermes.resume"),
+    ("Cancel Hermes task current", "hermes.cancel"),
+])
+def test_hermes_commands_use_shared_deterministic_route(phrase, skill):
+    ctx = context()
+
+    route = select_route(phrase, ctx)
+
+    assert route["selected_engine"] == "deterministic"
+    assert route["intent"]["skill"] == skill
+    assert ctx.router.calls == 0
+
+
+@pytest.mark.parametrize(("phrase", "goal", "background"), [
+    (
+        "Ask Hermes to research three public sources about renewable energy",
+        "research three public sources about renewable energy", False,
+    ),
+    (
+        "Give Hermes a task to prepare a short Word report",
+        "prepare a short Word report", False,
+    ),
+    (
+        "/goal Research the leading AI automation channels",
+        "Research the leading AI automation channels", False,
+    ),
+    (
+        "/background Research current renewable-energy developments",
+        "Research current renewable-energy developments", True,
+    ),
+])
+def test_hermes_goal_phrasings_extract_data_only(phrase, goal, background):
+    ctx = context()
+
+    intent = select_route(phrase, ctx)["intent"]
+
+    assert intent == {
+        "skill": "hermes.plan",
+        "params": {"goal": goal, "background_requested": background},
+    }
+    assert ctx.router.calls == 0

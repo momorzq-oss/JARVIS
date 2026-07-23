@@ -265,6 +265,12 @@ def _dispatch_registered(intent, ctx):
         if skill == "task.speed":
             return task.set_speed(params.get("direction", "faster"))
 
+    if skill.startswith("hermes."):
+        controller = getattr(ctx, "assistant_controller", None)
+        if controller is None:
+            return "Hermes is unavailable because the JARVIS controller is not running."
+        return controller.handle_hermes_intent(skill, params)
+
     # slow skills get the immediate JARVIS-style acknowledgment
     if any(skill.startswith(p) for p in SLOW_PREFIXES):
         ctx.speaker.speak(random.choice(ACK_LINES), block=False)

@@ -503,6 +503,7 @@ class GuiController(QObject):
         skill = str(intent.get("skill") or "")
         return skill if skill in {
             "task.pause", "task.resume", "task.cancel", "task.speed",
+            "hermes.pause", "hermes.resume", "hermes.cancel",
             "system.emergency_stop", "system.stop_speech",
         } else ""
 

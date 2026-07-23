@@ -18,6 +18,8 @@ from core.automation_intents import classify_browser_intent
     ("Can you find information about quantum computing?", "web.search", "quantum computing", "google"),
     ("Open Google and look up machine learning", "web.search", "machine learning", "google"),
     ("Find me an article about local AI", "web.search", "local AI", "google"),
+    ("Could you search Google for official Python documentation?", "web.search", "official Python documentation", "google"),
+    ("Please look up official OpenAI API docs on Google", "web.search", "official OpenAI API docs", "google"),
     ("YouTube local LLM creation", "browser.search_youtube", "local LLM creation", "youtube"),
     ("Look on YouTube for building a local LLM", "browser.search_youtube", "building a local LLM", "youtube"),
     ("Find a video explaining local language models", "browser.search_youtube", "local language models", "youtube"),

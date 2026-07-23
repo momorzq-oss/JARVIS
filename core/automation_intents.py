@@ -177,7 +177,7 @@ def _extract_browser_query(cleaned, destination=""):
     )
     value = re.sub(
         r"\b(?:a|an|the)?\s*(?:educational\s+)?(?:video|videos|tutorial|"
-        r"tutorials|lesson|lessons|article|articles|documentation|docs?|web page)\b",
+        r"tutorials|lesson|lessons|article|articles|web page)\b",
         " ", value, flags=re.I,
     )
     value = _BROWSER_FILLER.sub(" ", value)

@@ -1,6 +1,6 @@
 # Hermes Packaged Validation
 
-A new Hermes candidate was intentionally not built. The supported Python 3.12 suite is complete at 596 collected, 596 passed, 0 failed, and 0 skipped. One real zero-tool response failed exact-schema validation and three later exact-schema requests returned HTTP 429, so the required Hermes pilots have not all passed.
+A new Hermes candidate was intentionally not built. The supported Python 3.12 suite is complete at 598 collected, 598 passed, 0 failed, and 0 skipped. One real zero-tool response failed exact-schema validation and three later exact-schema requests returned HTTP 429, so the required Hermes pilots have not all passed.
 
 The existing recovery candidate at `release\candidates\JARVIS-FULL-COMMAND-RECOVERY-20260723-100804\JARVIS\JARVIS.exe` previously passed its startup, wake word, microphone, bundled Piper, emergency-stop, and clean-shutdown checks. Its SHA-256 is `6EE9379F43F44C5EEE369768FBE159CC6CEF35A5A862E1B6FB383CDAE9D64461`, but it predates the latest routing and Hermes cancellation changes and is not a Hermes release candidate.
 

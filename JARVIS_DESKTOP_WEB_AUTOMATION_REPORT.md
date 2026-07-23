@@ -30,6 +30,9 @@ Date: 2026-07-20
 - Pause video: passed.
 - Emergency stop: passed.
 - Browser close: passed.
+- Flexible Google documentation query: preserved the full semantic topic and registered `https://www.google.com/search?q=official+Python+documentation`.
+- Flexible YouTube tutorial request: selected and opened `Learn Python DECORATORS in 7 minutes!` before owned-session close.
+- Browser ownership: closing JARVIS's session emptied its registry while preserving the pre-existing user Chrome and Word processes.
 - Word staff-training proposal: created visibly, saved, and verified.
 - Excel monthly household budget: created visibly, saved, and verified.
 - PowerPoint AI-in-education presentation: created visibly with ten slides, saved, and verified.
@@ -50,4 +53,4 @@ Date: 2026-07-20
 - Uploads, form submissions, messages, sharing, payments, purchases, refunds, subscriptions, account changes, and cloud deletion were not executed because they require explicit confirmation and real account context.
 - Outlook, OneNote, Access, and Teams account-specific actions still require live login and application-state validation.
 
-Hermes remains disabled and was not installed.
+Hermes v0.19.0 is installed externally and remains disabled inside JARVIS pending a valid structured pilot plan. The browser validation did not invoke Hermes.

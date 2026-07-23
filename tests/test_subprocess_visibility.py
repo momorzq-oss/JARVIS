@@ -169,6 +169,7 @@ def test_folder_uses_shell_handoff_and_registers_verified_window(monkeypatch, tm
         return Process()
 
     monkeypatch.setattr(system_control.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(system_control, "_native_process_ids_by_name", lambda _name: {84})
     monkeypatch.setattr(
         system_control,
         "_find_new_folder_window",
@@ -182,6 +183,35 @@ def test_folder_uses_shell_handoff_and_registers_verified_window(monkeypatch, tm
     _, metadata = registrations[0]
     assert metadata["pid"] == 84
     assert metadata["hwnd"] == 1001
+    assert metadata["extra"]["cleanup_pid_after_window_close"] is False
+
+
+def test_dedicated_folder_factory_process_records_exact_cleanup_identity(monkeypatch, tmp_path):
+    registrations = []
+    folder = tmp_path / "Downloads"
+    folder.mkdir()
+    target = SimpleNamespace(kind="folder", value=str(folder), name="Downloads")
+    ctx = SimpleNamespace(
+        registry=SimpleNamespace(
+            register=lambda *args, **kwargs: registrations.append((args, kwargs))
+        )
+    )
+
+    class ExplorerProcess:
+        pid = 84
+
+    monkeypatch.setattr(system_control.subprocess, "Popen", lambda *a, **k: ExplorerProcess())
+    monkeypatch.setattr(system_control, "_native_process_ids_by_name", lambda _name: {1})
+    monkeypatch.setattr(
+        system_control, "_find_new_folder_window",
+        lambda _path, _existing: (84, 1001, "Downloads - File Explorer"),
+    )
+    monkeypatch.setattr(system_control, "_process_create_time", lambda _pid: 123.5)
+
+    assert system_control._launch_resolved(target, ctx) == "Opening the folder Downloads."
+    extra = registrations[0][1]["extra"]
+    assert extra["cleanup_pid_after_window_close"] is True
+    assert extra["process_create_time"] == 123.5
 
 
 def test_generic_new_explorer_window_is_verified_by_process(monkeypatch, tmp_path):

@@ -1,4 +1,4 @@
-from core.registry import SessionRegistry, _native_window_closed
+from core.registry import SessionRegistry, _native_window_closed, _cleanup_verified_process
 from skills.system_control import close_thing
 
 
@@ -108,3 +108,41 @@ def test_already_closed_verified_window_is_successful_cleanup(tmp_path, monkeypa
     entry = registry.register("app", "Calculator", pid=None, hwnd=999999)
 
     assert registry._close_entry(entry) is True
+
+
+def test_closed_owned_folder_cleans_exact_factory_process(tmp_path, monkeypatch):
+    registry = SessionRegistry(tmp_path / "registry.json")
+    entry = registry.register(
+        "folder", "Downloads", pid=84, hwnd=1001,
+        extra={
+            "cleanup_pid_after_window_close": True,
+            "process_create_time": 123.5,
+        },
+    )
+    cleaned = []
+    monkeypatch.setattr("core.registry._native_window_closed", lambda *_args: True)
+    monkeypatch.setattr(
+        "core.registry._cleanup_verified_process",
+        lambda value: cleaned.append(value["pid"]) or True,
+    )
+
+    assert registry._close_entry(entry) is True
+    assert cleaned == [84]
+
+
+def test_process_cleanup_rejects_pid_reuse(monkeypatch):
+    class Process:
+        def create_time(self):
+            return 999.0
+
+        def terminate(self):
+            raise AssertionError("reused PID must not be terminated")
+
+    monkeypatch.setattr("core.registry._pid_has_visible_windows", lambda _pid: False)
+    monkeypatch.setattr("psutil.Process", lambda _pid: Process())
+    entry = {
+        "pid": 84,
+        "extra": {"process_create_time": "123.5"},
+    }
+
+    assert _cleanup_verified_process(entry) is False

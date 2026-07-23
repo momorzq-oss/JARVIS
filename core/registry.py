@@ -27,6 +27,62 @@ def _native_window_closed(user32, hwnd):
     )
 
 
+def _pid_has_visible_windows(pid):
+    """Return whether an exact PID still owns any visible top-level window."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        found = []
+        callback_type = ctypes.WINFUNCTYPE(
+            wintypes.BOOL, wintypes.HWND, wintypes.LPARAM,
+        )
+
+        def visit(hwnd, _parameter):
+            process_id = wintypes.DWORD()
+            ctypes.windll.user32.GetWindowThreadProcessId(
+                hwnd, ctypes.byref(process_id),
+            )
+            if (process_id.value == int(pid)
+                    and ctypes.windll.user32.IsWindowVisible(hwnd)):
+                found.append(int(hwnd))
+                return False
+            return True
+
+        callback = callback_type(visit)
+        ctypes.windll.user32.EnumWindows(callback, 0)
+        return bool(found)
+    except Exception:
+        # Unknown visibility must fail closed: do not terminate the process.
+        return True
+
+
+def _cleanup_verified_process(entry):
+    """Terminate only the exact process identity recorded at launch."""
+    pid = entry.get("pid")
+    extra = entry.get("extra") or {}
+    try:
+        expected_create_time = float(extra.get("process_create_time"))
+    except (TypeError, ValueError):
+        return False
+    if not pid or _pid_has_visible_windows(pid):
+        return False
+    try:
+        import psutil
+        process = psutil.Process(int(pid))
+        if abs(process.create_time() - expected_create_time) >= 0.001:
+            return False
+        process.terminate()
+        try:
+            process.wait(timeout=3)
+        except Exception:
+            process.kill()
+        return True
+    except psutil.NoSuchProcess:
+        return True
+    except Exception:
+        return False
+
+
 class SessionRegistry:
     def __init__(self, path):
         self.path = Path(path)
@@ -327,6 +383,10 @@ class SessionRegistry:
 
         # 3) native window handle (preferred for Explorer ownership)
         hwnd = entry.get("hwnd") or entry.get("window_handle")
+        extra = entry.get("extra") or {}
+        cleanup_after_window = str(
+            extra.get("cleanup_pid_after_window_close", "")
+        ).strip().lower() in {"1", "true", "yes"}
         window_close_failed = False
         if hwnd:
             try:
@@ -334,6 +394,8 @@ class SessionRegistry:
                 WM_CLOSE = 0x0010
                 user32 = ctypes.windll.user32
                 if _native_window_closed(user32, hwnd):
+                    if cleanup_after_window:
+                        _cleanup_verified_process(entry)
                     return True
                 if user32.IsWindow(int(hwnd)):
                     user32.PostMessageW(int(hwnd), WM_CLOSE, 0, 0)
@@ -343,6 +405,8 @@ class SessionRegistry:
                            and not _native_window_closed(user32, hwnd)):
                         time.sleep(0.05)
                     if _native_window_closed(user32, hwnd):
+                        if cleanup_after_window:
+                            _cleanup_verified_process(entry)
                         return True
                     window_close_failed = True
             except Exception:
@@ -353,7 +417,6 @@ class SessionRegistry:
         # ApplicationFrameHost, and reused Office/browser processes must never
         # be killed just because one owned HWND ignored WM_CLOSE.
         pid = entry.get("pid")
-        extra = entry.get("extra") or {}
         explicit_termination = str(
             extra.get("terminate_pid_on_close", "")
         ).strip().lower() in {"1", "true", "yes"}

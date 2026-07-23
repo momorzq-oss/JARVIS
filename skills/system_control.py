@@ -162,6 +162,15 @@ def _matching_process_ids(executable):
         return set()
 
 
+def _process_create_time(pid):
+    """Capture an exact process identity for later owned-only cleanup."""
+    try:
+        import psutil
+        return float(psutil.Process(int(pid)).create_time())
+    except Exception:
+        return None
+
+
 def _window_pid(hwnd):
     if not hwnd:
         return None
@@ -228,6 +237,47 @@ def _native_process_name(pid):
         return Path(buffer.value).name.lower()
     finally:
         kernel32.CloseHandle(handle)
+
+
+def _native_process_ids_by_name(executable):
+    """Snapshot matching Windows PIDs without importing process libraries."""
+    if os.name != "nt":
+        return _matching_process_ids(executable)
+    from ctypes import wintypes
+
+    class ProcessEntry32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+    invalid_handle = ctypes.c_void_p(-1).value
+    if not snapshot or snapshot == invalid_handle:
+        return set()
+    wanted = Path(str(executable)).name.lower()
+    matches = set()
+    entry = ProcessEntry32W()
+    entry.dwSize = ctypes.sizeof(entry)
+    try:
+        if kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+            while True:
+                if entry.szExeFile.lower() == wanted:
+                    matches.add(int(entry.th32ProcessID))
+                if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                    break
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return matches
 
 
 def _effective_window_pid(hwnd, fallback_pid=None):
@@ -388,8 +438,11 @@ def _launch_resolved(target, ctx):
         path = Path(target.value)
         if not path.exists():
             return None
+        dedicated_process = False
+        process_create_time = None
         try:
             if target.kind == "folder":
+                existing_explorer_pids = _native_process_ids_by_name("explorer.exe")
                 existing_hwnds = {
                     hwnd for hwnd, _pid, _title in _native_window_snapshot()
                 }
@@ -407,6 +460,10 @@ def _launch_resolved(target, ctx):
                 if verified is None:
                     return None
                 pid, hwnd, window_title = verified
+                dedicated_process = bool(pid and pid not in existing_explorer_pids)
+                process_create_time = (
+                    _process_create_time(pid) if dedicated_process else None
+                )
             else:
                 os.startfile(str(path))
                 pid = None
@@ -421,6 +478,10 @@ def _launch_resolved(target, ctx):
                     "close_policy": (
                         "owned_only" if hwnd or pid
                         else "unverified_ownership"
+                    ),
+                    "cleanup_pid_after_window_close": dedicated_process,
+                    "process_create_time": (
+                        process_create_time if process_create_time is not None else ""
                     ),
                 },
             )

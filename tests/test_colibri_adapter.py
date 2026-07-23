@@ -7,6 +7,8 @@ def test_colibri_is_disabled_by_default():
     adapter = ColibriAdapter(enabled=False)
     with pytest.raises(ColibriError, match="disabled"):
         adapter.health()
+    with pytest.raises(ColibriError, match="disabled"):
+        adapter.complete("invalid but never transmitted")
 
 
 def test_colibri_rejects_non_local_endpoint():

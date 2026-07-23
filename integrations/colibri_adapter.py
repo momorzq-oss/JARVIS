@@ -62,6 +62,9 @@ class ColibriAdapter:
 
     def complete(self, messages: list[dict], *, max_tokens=512, temperature=0.2) -> str:
         """Submit text-only chat. Returned text is data, never executable actions."""
+        # Disabled/unavailable fallback is authoritative and must not be
+        # obscured by validation of a payload that will never be transmitted.
+        self._require_configured()
         if not isinstance(messages, list) or not all(isinstance(item, dict) for item in messages):
             raise ColibriError("messages must be a list of objects")
         response = self._request("POST", "/chat/completions", {

@@ -168,6 +168,20 @@ def test_registry_command_is_spoken_once_by_controller():
     assert ctx.speaker.spoken == [spoken]
 
 
+def test_silent_command_settles_to_truthful_wake_listening(monkeypatch):
+    ctx = make_ctx()
+    ctl = AssistantController(ctx=ctx, skip_preload=True)
+    ctl.state.update(microphone_active=True, wakeword_active=True)
+    states = []
+    ctl.set_callback("state", lambda state, detail: states.append((state, detail)))
+    monkeypatch.setattr("main.handle_utterance", lambda text, routed_ctx: None)
+
+    ctl.handle_text("emergency stop")
+
+    assert ctl._state == STATE_LISTENING_WAKE
+    assert states[-1] == (STATE_LISTENING_WAKE, "Waiting for Hey Jarvis")
+
+
 def test_start_voice_twice_does_not_recreate_engine(monkeypatch):
     ctx = make_ctx()
     ctl = AssistantController(ctx=ctx, skip_preload=True)

@@ -473,7 +473,11 @@ class AssistantController:
         self._emit("voicestate", self.state.snapshot())
         self._emit("status", self.status_snapshot())
         if self._state != STATE_ERROR:
-            self._set_state(STATE_READY, "Ready")
+            voice = self.state.snapshot()
+            if voice.get("microphone_active") and voice.get("wakeword_active"):
+                self._set_state(STATE_LISTENING_WAKE, "Waiting for Hey Jarvis")
+            else:
+                self._set_state(STATE_READY, "Ready")
         return spoken
 
     # ---------------------------------------------------------------- speech

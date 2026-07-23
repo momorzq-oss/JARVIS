@@ -481,14 +481,17 @@ class GuiController(QObject):
     def submit_text(self, text):
         if self._shutdown_started:
             return False
-        if self._is_task_control(text):
+        control = self._task_control_skill(text)
+        if control:
+            if control == "system.emergency_stop":
+                self._clear_pending_commands()
             self.pool.start(_Task(self.controller.handle_text, text))
             return True
         self._command_queue.put((self.controller.handle_text, (text,), {}, None))
         return True
 
     @staticmethod
-    def _is_task_control(text):
+    def _task_control_skill(text):
         # Use the authoritative deterministic router so typed aliases and
         # voice-cleaned controls take the same pre-emptive path.  A separate
         # phrase regex previously missed bare Pause/Resume/Cancel and queued
@@ -497,10 +500,35 @@ class GuiController(QObject):
         from core.command_text import cleanup_command
 
         intent = fast_lane(cleanup_command(text), {}) or {}
-        return str(intent.get("skill") or "") in {
+        skill = str(intent.get("skill") or "")
+        return skill if skill in {
             "task.pause", "task.resume", "task.cancel", "task.speed",
             "system.emergency_stop", "system.stop_speech",
-        }
+        } else ""
+
+    @classmethod
+    def _is_task_control(cls, text):
+        return bool(cls._task_control_skill(text))
+
+    def _clear_pending_commands(self):
+        """Discard commands that have not started when emergency stop wins."""
+        cleared = 0
+        while True:
+            try:
+                item = self._command_queue.get_nowait()
+            except queue.Empty:
+                break
+            if item is None:
+                self._command_queue.put(None)
+                break
+            try:
+                done = item[3]
+                if done is not None:
+                    done.set()
+            except (IndexError, TypeError):
+                pass
+            cleared += 1
+        return cleared
 
     def speak(self, text):
         self.run_async(self.controller.speak, text)

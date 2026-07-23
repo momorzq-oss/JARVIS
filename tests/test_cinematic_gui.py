@@ -223,6 +223,28 @@ def test_all_shared_router_control_aliases_bypass_long_tasks(command):
     assert GuiController._is_task_control(command)
 
 
+def test_emergency_stop_clears_pending_commands_before_dispatch(window, monkeypatch):
+    controller = window.gc
+    cleared = []
+    started = []
+    monkeypatch.setattr(controller, "_clear_pending_commands", lambda: cleared.append(True))
+    monkeypatch.setattr(controller.pool, "start", started.append)
+
+    assert controller.submit_text("emergency stop") is True
+
+    assert cleared == [True]
+    assert len(started) == 1
+
+
+def test_gui_emergency_button_uses_shared_command_pipeline(window, monkeypatch):
+    submitted = []
+    monkeypatch.setattr(window.gc, "submit_text", submitted.append)
+
+    window._on_emergency_stop()
+
+    assert submitted == ["emergency stop"]
+
+
 def test_ordinary_commands_remain_serialized():
     assert not GuiController._is_task_control("open youtube")
 

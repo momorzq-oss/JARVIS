@@ -582,7 +582,10 @@ class MainWindow(QWidget):
         self._log_activity("AGENT", "Stop task requested", "control")
 
     def _on_emergency_stop(self):
-        self.gc.stop_task()
+        # Use the same pre-emptive command path as typed and voice requests.
+        # That path stops Piper, active automation, browser work, Hermes, and
+        # pending commands instead of giving the GUI button a weaker meaning.
+        self._quick("emergency stop")
         try:
             self.gc.bridge.emergency_stop_triggered.emit()
         except AttributeError:

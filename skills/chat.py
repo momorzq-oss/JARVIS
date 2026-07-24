@@ -8,7 +8,7 @@ import time
 from collections import deque
 from datetime import datetime
 
-from config import Config
+from config import Config, valid_openrouter_key
 from brain.prompts import JARVIS_SYSTEM_PROMPT
 
 _history = deque(maxlen=Config.CHAT_HISTORY_TURNS * 2)
@@ -74,11 +74,6 @@ def chat(message, remember_fact, ctx):
         _remember_exchange(message, local_reply)
         return local_reply
 
-    if not ctx.llm.available:
-        reply = _offline_reply(message)
-        _remember_exchange(message, reply)
-        return reply
-
     system = JARVIS_SYSTEM_PROMPT.format(
         address=Config.OWNER_ADDRESS, memory=_memory_block())
     conversation = getattr(ctx, "conversation", None)
@@ -114,12 +109,79 @@ def chat(message, remember_fact, ctx):
         messages.extend(list(_history))
         messages.append({"role": "user", "content": message})
 
-    reply = ctx.llm.chat(messages, temperature=0.75, max_tokens=450)
+    reply = _provider_reply(ctx, messages)
     if not reply:
         reply = _offline_reply(message)
 
     _remember_exchange(message, reply)
     return reply
+
+
+def _provider_reply(ctx, messages):
+    """Try cloud, local Colibri, then local Qwen without leaking failures."""
+    llm = getattr(ctx, "llm", None)
+    _refresh_cloud_credentials(llm)
+    if llm is not None and getattr(llm, "available", False):
+        try:
+            reply = llm.chat(messages, temperature=0.75, max_tokens=450)
+            if reply:
+                _record_provider(ctx, "openrouter")
+                return str(reply).strip()
+        except Exception:
+            pass
+
+    colibri = getattr(ctx, "colibri", None)
+    if colibri is None:
+        try:
+            from integrations.colibri_adapter import ColibriAdapter
+            colibri = ColibriAdapter()
+        except Exception:
+            colibri = None
+    if colibri is not None and getattr(colibri, "configured", False):
+        try:
+            reply = colibri.complete(
+                messages, max_tokens=320, temperature=0.55
+            )
+            if reply:
+                _record_provider(ctx, "colibri")
+                return str(reply).strip()
+        except Exception:
+            pass
+
+    router = getattr(ctx, "router", None)
+    generate = getattr(router, "generate_reply", None)
+    if callable(generate):
+        try:
+            reply = generate(
+                messages, max_new_tokens=256, temperature=0.6
+            )
+            if reply:
+                _record_provider(ctx, "local_qwen")
+                return str(reply).strip()
+        except Exception:
+            pass
+    _record_provider(ctx, "unavailable")
+    return ""
+
+
+def _refresh_cloud_credentials(llm):
+    """Pick up a GUI-saved key if the live context predates configuration."""
+    if llm is None or getattr(llm, "available", False):
+        return
+    try:
+        from core.secret_store import load_openrouter_key
+        key = load_openrouter_key()
+        if valid_openrouter_key(key):
+            llm.api_key = key
+            llm._client = None
+    except Exception:
+        pass
+
+
+def _record_provider(ctx, provider):
+    state = getattr(ctx, "state", None)
+    if isinstance(state, dict):
+        state["chat_provider"] = provider
 
 
 def _remember_exchange(message, reply):
@@ -169,7 +231,7 @@ def _local_conversation_reply(message, ctx):
 
 
 def _offline_reply(message):
-    """Useful local response when OpenRouter is unavailable."""
+    """Truthful response when no generative provider could answer."""
     low = message.lower()
     if any(word in low for word in ("help", "what can you do", "capabilities")):
         return (
@@ -179,8 +241,9 @@ def _offline_reply(message):
     if "who are you" in low:
         return "I'm JARVIS, your local Windows assistant, currently in offline mode, sir."
     return (
-        "The cloud reasoning service is unavailable, sir. Local commands still work; "
-        "conversation, drafting, and summarization will resume when the connection returns."
+        "I could not reach OpenRouter or a local generation model, sir. "
+        "Local commands still work; check the OpenRouter connection or enable "
+        "the local Qwen or Colibri provider for open-ended conversation."
     )
 
 

@@ -660,9 +660,16 @@ def main(argv=None):
         ctx.speaker.stop()
         ctx.speaker = ConsoleSpeaker()
 
-    if not Config.OPENROUTER_API_KEY:
-        log("init", "OPENROUTER_API_KEY missing â€” conversation/drafting "
-                    "skills will be limited (see .env.example)", "red")
+    if not ctx.llm.available:
+        local_ready = Config.LOCAL_ROUTER_ENABLED or (
+            Config.COLIBRI_ENABLED and Config.COLIBRI_MODE == "http_api"
+        )
+        detail = (
+            "OpenRouter unavailable - general chat will use the configured local fallback"
+            if local_ready else
+            "OpenRouter unavailable - configure OpenRouter or a local chat provider"
+        )
+        log("init", detail, "yellow" if local_ready else "red")
 
     if args.skip_model_preload:
         log("init", "model preload skipped", "yellow")

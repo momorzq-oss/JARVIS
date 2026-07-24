@@ -5,7 +5,7 @@ import shutil
 import threading
 from dataclasses import dataclass
 
-from config import Config
+from config import Config, valid_openrouter_key
 
 
 WORKING = "WORKING"
@@ -26,7 +26,6 @@ class HealthResult:
 
 
 CONFIG_REQUIREMENTS = {
-    "chat": ("OPENROUTER_API_KEY",),
     "coder": ("OPENROUTER_API_KEY",),
     "research": ("OPENROUTER_API_KEY",),
 }
@@ -89,6 +88,9 @@ class CapabilityHealth:
         if not callable_present:
             return HealthResult(MISSING, "Approved operation is not implemented")
 
+        if skill == "chat" and operation is None:
+            return self._chat_health()
+
         requirements = OPERATION_CONFIG_REQUIREMENTS.get(
             (skill, operation), CONFIG_REQUIREMENTS.get(skill, ())
         )
@@ -127,6 +129,43 @@ class CapabilityHealth:
             )
 
         return HealthResult(WORKING, "Implementation available", tuple(dependencies))
+
+    def _chat_health(self):
+        """Report every supported conversation provider, including saved keys."""
+        if self._configured("OPENROUTER_API_KEY"):
+            return HealthResult(WORKING, "OpenRouter generation configured")
+        try:
+            from core.secret_store import load_openrouter_key
+            if valid_openrouter_key(load_openrouter_key()):
+                return HealthResult(WORKING, "OpenRouter generation configured")
+        except Exception:
+            pass
+
+        if Config.COLIBRI_ENABLED and Config.COLIBRI_MODE == "http_api":
+            return HealthResult(WORKING, "Local Colibri generation configured")
+
+        if Config.LOCAL_ROUTER_ENABLED:
+            dependencies = ("torch", "transformers")
+            missing = [name for name in dependencies
+                       if importlib.util.find_spec(name) is None]
+            if missing:
+                return HealthResult(
+                    DEGRADED,
+                    "Local Qwen enabled but dependency unavailable: "
+                    + ", ".join(missing),
+                    tuple(missing),
+                )
+            return HealthResult(
+                WORKING,
+                f"Local {Config.ROUTER_MODEL_NAME} generation enabled",
+                dependencies,
+            )
+
+        return HealthResult(
+            DEGRADED,
+            "No cloud or local generation provider configured; "
+            "deterministic local replies only",
+        )
 
     def system_metrics(self):
         """Collect bounded local metrics without process-enumeration APIs.

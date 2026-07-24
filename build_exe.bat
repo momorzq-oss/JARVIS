@@ -55,6 +55,7 @@ if errorlevel 1 (
 
 echo.
 echo [JARVIS] Building JARVIS.exe...
+set "LOCAL_ROUTER_ENABLED=1"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "build\build_exe_watchdog.ps1"
 
 if errorlevel 1 (

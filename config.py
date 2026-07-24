@@ -140,7 +140,10 @@ class Config:
     ).strip()
     WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "auto").strip().lower()
     GPU_ENABLED = _env_flag("GPU_ENABLED", True)
-    LOCAL_ROUTER_ENABLED = _env_flag("LOCAL_ROUTER_ENABLED", not getattr(sys, "frozen", False))
+    # The local Qwen model is both the intent classifier and the offline
+    # conversational fallback.  Packaged builds now include its runtime, so
+    # keep it enabled unless the user explicitly opts out.
+    LOCAL_ROUTER_ENABLED = _env_flag("LOCAL_ROUTER_ENABLED", True)
     OPENROUTER_TIMEOUT = int(os.getenv("OPENROUTER_TIMEOUT", "60"))
     OPENROUTER_RETRIES = int(os.getenv("OPENROUTER_RETRIES", "3"))
 

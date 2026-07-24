@@ -48,13 +48,16 @@ def test_live_task_checkpoint_waits_while_paused():
 
 def test_word_com_progressive_insertion(monkeypatch):
     inserted = []
+    events = []
 
     class FakeWordService:
         process_id = None
         window_handle = None
         def open(self, visible=True):
             assert visible is True
+            events.append("word_opened")
         def new_document(self):
+            events.append("document_created")
             return object()
         def insert_heading(self, text, level=1, doc=None):
             inserted.append(("heading", text))
@@ -78,13 +81,20 @@ def test_word_com_progressive_insertion(monkeypatch):
             return None
 
     monkeypatch.setattr("skills.office_service.WordService", FakeWordService)
-    monkeypatch.setattr(
-        "skills.research.build_research_session",
-        lambda *args, **kwargs: {
+    def build_session(*_args, **kwargs):
+        events.append("research_started")
+        assert events[:3] == [
+            "word_opened", "document_created", "research_started",
+        ]
+        assert kwargs["summarize_with_llm"] is False
+        kwargs["section_cb"]("Introduction", "Clean energy matters.")
+        return {
             "abstract": "",
             "draft": {"Introduction": "Clean energy matters."},
             "sources": [],
-        },
+        }
+    monkeypatch.setattr(
+        "skills.research.build_research_session", build_session,
     )
     task = LiveTaskController()
     task.state.delay_ms = 0
@@ -100,7 +110,10 @@ def test_word_com_progressive_insertion(monkeypatch):
         ("paragraph", "Clean energy matters."),
         ("heading", "References"),
     ]
+    assert events[0] == "word_opened"
+    assert events.index("word_opened") < events.index("research_started")
     assert ctx.pending["kind"] == "save_document"
+    assert ctx.state["active_office_entry"] == "document"
 
 
 def test_supplied_text_insert_and_save_use_active_word_service(tmp_path):

@@ -457,7 +457,7 @@ def draft_section(sess, section, ctx, extra=""):
     return text.strip()
 
 
-def draft_all(sess, ctx, progress_cb=None, checkpoint=None):
+def draft_all(sess, ctx, progress_cb=None, checkpoint=None, section_cb=None):
     for i, section in enumerate(sess.get("outline", []), 1):
         if checkpoint:
             checkpoint()
@@ -465,6 +465,8 @@ def draft_all(sess, ctx, progress_cb=None, checkpoint=None):
             progress_cb(f"Drafting section {i} of {len(sess['outline'])}: {section}.")
         sess["draft"][section] = draft_section(sess, section, ctx)
         save_session(sess)
+        if section_cb:
+            section_cb(section, sess["draft"][section])
     joined = "\n\n".join(
         f"## {k}\n{v}" for k, v in sess["draft"].items())[:4000]
     if checkpoint:
@@ -488,7 +490,8 @@ def draft_all(sess, ctx, progress_cb=None, checkpoint=None):
 
 def build_research_session(topic, ctx, max_sources=8, max_sections=6,
                            progress_cb=None, checkpoint=None,
-                           summarize_with_llm=True, min_sources=3):
+                           summarize_with_llm=True, min_sources=3,
+                           section_cb=None):
     """Build a source-grounded in-memory report for visible Office insertion."""
     topic = (topic or "").strip()
     if not topic:
@@ -509,7 +512,10 @@ def build_research_session(topic, ctx, max_sources=8, max_sections=6,
         return None
     sess["stage"] = "DRAFT"
     save_session(sess)
-    draft_all(sess, ctx, progress_cb=progress_cb, checkpoint=checkpoint)
+    draft_all(
+        sess, ctx, progress_cb=progress_cb, checkpoint=checkpoint,
+        section_cb=section_cb,
+    )
     if not any(text.strip() for text in sess.get("draft", {}).values()):
         return None
     sess["stage"] = "DONE"

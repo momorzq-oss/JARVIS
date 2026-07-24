@@ -281,7 +281,7 @@ VALID_SKILLS = {
 
 
 class Router:
-    """Lazy-loaded local classifier. First classify() pays the model load."""
+    """Lazy-loaded local classifier and bounded conversational fallback."""
 
     def __init__(self, model_name=None):
         self.model_name = model_name or Config.ROUTER_MODEL_NAME
@@ -322,11 +322,22 @@ class Router:
                     import torch
                     from transformers import AutoModelForCausalLM, AutoTokenizer
                 self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+                model_options = {
+                    "torch_dtype": "auto",
+                    "low_cpu_mem_usage": True,
+                }
+                # Accelerate's automatic placement can decide that even this
+                # small model must be entirely disk-offloaded on CPU-only
+                # Windows systems, which raises instead of loading it.  Keep
+                # CPU placement explicit; use automatic placement only when a
+                # real CUDA device is available.
+                if torch.cuda.is_available():
+                    model_options["device_map"] = "auto"
+                else:
+                    model_options["torch_dtype"] = torch.float32
                 self._model = AutoModelForCausalLM.from_pretrained(
                     self.model_name,
-                    torch_dtype="auto",
-                    device_map="auto",
-                    low_cpu_mem_usage=True,
+                    **model_options,
                 )
                 self._model.eval()
                 self._torch = torch
@@ -380,6 +391,65 @@ class Router:
             return {"skill": skill, "params": params}
         except Exception:
             return fallback
+
+    # ------------------------------------------------------------- generate
+    def generate_reply(self, messages, max_new_tokens=256, temperature=0.6):
+        """Generate a bounded local reply with the already configured Qwen model.
+
+        The router model used to classify commands but was never offered as a
+        chat provider.  Reusing the same lazy-loaded model gives general
+        conversation a real offline path without starting another process or
+        granting generated text permission to execute desktop actions.
+        """
+        if not self._ensure_loaded():
+            return ""
+        try:
+            safe_messages = []
+            for item in messages or []:
+                if not isinstance(item, dict):
+                    continue
+                role = str(item.get("role") or "").strip().lower()
+                content = str(item.get("content") or "").strip()
+                if role not in {"system", "user", "assistant"} or not content:
+                    continue
+                safe_messages.append({"role": role, "content": content})
+            if not safe_messages:
+                return ""
+
+            prompt = self._tokenizer.apply_chat_template(
+                safe_messages, tokenize=False, add_generation_prompt=True
+            )
+            inputs = self._tokenizer([prompt], return_tensors="pt")
+            inputs = {key: value.to(self._model.device)
+                      for key, value in inputs.items()}
+            token_limit = max(32, min(int(max_new_tokens), 512))
+            sampling_temperature = max(0.05, min(float(temperature), 1.5))
+            do_sample = sampling_temperature > 0.05
+            generation_options = {
+                "max_new_tokens": token_limit,
+                "do_sample": do_sample,
+                "pad_token_id": self._tokenizer.eos_token_id,
+            }
+            if do_sample:
+                generation_options.update({
+                    "temperature": sampling_temperature,
+                    "top_p": 0.9,
+                    "top_k": 50,
+                })
+            with self._torch.no_grad():
+                output = self._model.generate(**inputs, **generation_options)
+            generated = output[0][inputs["input_ids"].shape[-1]:]
+            reply = self._tokenizer.decode(
+                generated, skip_special_tokens=True
+            ).strip()
+            reply = re.sub(r"^\s*assistant\s*:\s*", "", reply,
+                           flags=re.IGNORECASE)
+            return reply.strip()
+        except Exception as exc:
+            if os.getenv("JARVIS_ROUTER_DEBUG") == "1":
+                traceback.print_exc()
+            self.load_error = str(exc)
+            return ""
 
     @staticmethod
     def _parse_json(text):

@@ -189,40 +189,14 @@ def create_live_document(topic, ctx, report_length="full"):
         task.state.delay_ms = max(0, Config.LIVE_TYPING_DELAY_MS)
 
     try:
-        from skills import research
         short_report = str(report_length).lower() == "short"
-
-        def research_progress(step):
-            if task is not None:
-                task.checkpoint()
-                current = task.snapshot().get("progress", 0)
-                task.update(step=step, progress=min(45, max(3, current + 3)))
-
-        session = research.build_research_session(
-            topic, ctx,
-            max_sources=4 if short_report else 8,
-            max_sections=3 if short_report else 6,
-            progress_cb=research_progress,
-            checkpoint=task.checkpoint if task is not None else None,
-            summarize_with_llm=not short_report,
-        )
-        if session is None:
-            detail = getattr(ctx.llm, "last_error", "") or "No verified sources or draft"
-            if task is not None:
-                task.fail(detail)
-            return "The research service could not build a source-grounded report, sir."
-        sources = session.get("sources", [])
-        if task is not None:
-            task.update(
-                step=f"Verified {len(sources)} real sources; opening Microsoft Word",
-                progress=48, sources_found=len(sources), sources_verified=len(sources),
-            )
         speaker = getattr(ctx, "speaker", None)
         if speaker is not None:
-            speaker.speak(
-                f"I verified {len(sources)} real sources. Opening Word now, sir."
-            )
+            speaker.speak(f"Opening Word and researching {topic}, sir.")
 
+        # A live request must become visible before network research begins.
+        # Previously Word was opened only after every source and section had
+        # been prepared, leaving the desktop unchanged for over a minute.
         from skills.office_service import WordService
         service = WordService()
         service.open(visible=True)
@@ -236,18 +210,79 @@ def create_live_document(topic, ctx, report_length="full"):
                 "application": "Microsoft Word", "process_name": "WINWORD.EXE",
             },
         )
-        operations = [("title", topic.title())]
+        ctx.state["word_service"] = service
+        ctx.state["active_office_entry"] = entry["id"]
+        service.insert_heading(topic.title(), level=1, doc=document)
+        words_written = len(topic.split())
+        paragraphs_written = 0
+        if task is not None:
+            task.update(
+                step="Microsoft Word opened; researching verified sources",
+                progress=3, current_heading=topic.title(),
+                words_written=words_written, paragraph_count=0,
+            )
+
+        from skills import research
+
+        def research_progress(step):
+            if task is not None:
+                task.checkpoint()
+                current = task.snapshot().get("progress", 0)
+                task.update(step=step, progress=min(45, max(3, current + 3)))
+
+        def write_section(section, text):
+            """Append each completed draft section immediately in visible Word."""
+            nonlocal words_written, paragraphs_written
+            if task is not None:
+                task.checkpoint()
+            service.insert_heading(section, level=1, doc=document)
+            words_written += len(section.split())
+            for paragraph in re.split(r"\n\s*\n", str(text or "")):
+                paragraph = paragraph.strip()
+                if not paragraph:
+                    continue
+                if task is not None:
+                    task.checkpoint()
+                service.type_visibly(paragraph, doc=document)
+                words_written += len(paragraph.split())
+                paragraphs_written += 1
+                if task is not None and task.state.delay_ms:
+                    time.sleep(task.state.delay_ms / 1000.0)
+            if task is not None:
+                task.update(
+                    step=f"Wrote {section}", progress=min(88, 52 + paragraphs_written * 4),
+                    current_heading=section, words_written=words_written,
+                    paragraph_count=paragraphs_written,
+                )
+
+        session = research.build_research_session(
+            topic, ctx,
+            max_sources=4 if short_report else 6,
+            max_sections=3 if short_report else 5,
+            progress_cb=research_progress,
+            checkpoint=task.checkpoint if task is not None else None,
+            # Raw verified excerpts already ground the section prompts. Avoid
+            # one extra cloud request per source before visible writing starts.
+            summarize_with_llm=False,
+            section_cb=write_section,
+        )
+        if session is None:
+            detail = getattr(ctx.llm, "last_error", "") or "No verified sources or draft"
+            if task is not None:
+                task.fail(detail)
+            return "The research service could not build a source-grounded report, sir."
+        sources = session.get("sources", [])
+        if task is not None:
+            task.update(
+                step=f"Finishing the report with {len(sources)} verified sources",
+                progress=90, sources_found=len(sources), sources_verified=len(sources),
+            )
+        operations = []
         if session.get("abstract"):
             operations.extend((
-                ("heading", "Executive Summary"),
+                ("heading", "Summary"),
                 ("paragraph", session["abstract"]),
             ))
-        for section, text in session.get("draft", {}).items():
-            operations.append(("heading", section))
-            for paragraph in re.split(r"\n\s*\n", text):
-                paragraph = paragraph.strip()
-                if paragraph:
-                    operations.append(("paragraph", paragraph))
         operations.append(("heading", "References"))
         for source in sources:
             operations.append((
@@ -257,13 +292,11 @@ def create_live_document(topic, ctx, report_length="full"):
             ))
 
         total = max(1, len(operations))
-        words_written = 0
-        paragraphs_written = 0
         for index, (kind, text) in enumerate(operations, 1):
             if task is not None:
                 task.checkpoint()
                 task.update(
-                    step=text[:80], progress=48 + int(index * 50 / total),
+                    step=text[:80], progress=90 + int(index * 9 / total),
                     current_heading=text[:120] if kind in ("title", "heading") else "",
                     words_written=words_written, paragraph_count=paragraphs_written,
                 )
@@ -293,7 +326,6 @@ def create_live_document(topic, ctx, report_length="full"):
             save_callback=_save,
         )
         ctx.pending = {"kind": "save_document", "request": request}
-        ctx.state["word_service"] = service
         if task is not None:
             task.complete()
         return "The document is ready. Where would you like me to save it?"

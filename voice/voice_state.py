@@ -28,6 +28,20 @@ class VoiceState:
         self.whisper_loaded = False
         self.recording = False
         self.processing = False
+        # human conversation mode
+        self.conversation_active = False
+        self.conversation_state = "SLEEPING"
+        self.conversation_session_id = ""
+        self.conversation_started_at = 0.0
+        self.conversation_last_activity = 0.0
+        self.conversation_turns = 0
+        self.conversation_topic = ""
+        self.conversation_task = ""
+        self.conversation_pending_question = ""
+        self.conversation_pending_confirmation = ""
+        self.conversation_interrupted = False
+        self.conversation_summary = ""
+        self.waiting_for_reply = False
         # diagnostics
         self.input_level = 0.0
         self.frames_per_second = 0.0
@@ -50,6 +64,19 @@ class VoiceState:
                 "whisper_loaded": self.whisper_loaded,
                 "recording": self.recording,
                 "processing": self.processing,
+                "conversation_active": self.conversation_active,
+                "conversation_state": self.conversation_state,
+                "conversation_session_id": self.conversation_session_id,
+                "conversation_started_at": self.conversation_started_at,
+                "conversation_last_activity": self.conversation_last_activity,
+                "conversation_turns": self.conversation_turns,
+                "conversation_topic": self.conversation_topic,
+                "conversation_task": self.conversation_task,
+                "conversation_pending_question": self.conversation_pending_question,
+                "conversation_pending_confirmation": self.conversation_pending_confirmation,
+                "conversation_interrupted": self.conversation_interrupted,
+                "conversation_summary": self.conversation_summary,
+                "waiting_for_reply": self.waiting_for_reply,
                 "input_level": round(self.input_level, 3),
                 "frames_per_second": round(self.frames_per_second, 1),
                 "last_audio_error": self.last_audio_error,

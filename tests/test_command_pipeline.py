@@ -626,6 +626,28 @@ def test_trace_command_is_not_spoken_as_a_long_json_payload(monkeypatch):
     assert spoken == []
 
 
+def test_bom_prefixed_trace_command_cannot_execute_action(monkeypatch):
+    import main as main_mod
+
+    fake_ctx = context()
+    spoken = []
+    fake_ctx.speaker = SimpleNamespace(
+        speak=lambda text, block=False: spoken.append(text),
+        stop=lambda: None,
+        speaking=False,
+    )
+    monkeypatch.setattr(
+        main_mod, "dispatch",
+        lambda *_args, **_kwargs: pytest.fail("trace command executed an action"),
+    )
+
+    result = main_mod.handle_utterance("\xef\xbb\xbf/trace Open Downloads", fake_ctx)
+
+    assert '"capability_id": "app.open_folder"' in result
+    assert len(spoken) == 1
+    assert spoken[0] == result
+
+
 def test_emergency_stop_completion_is_visual_but_does_not_restart_speech(monkeypatch):
     import main as main_mod
 

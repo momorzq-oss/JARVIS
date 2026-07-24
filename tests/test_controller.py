@@ -165,6 +165,25 @@ def test_handle_text_updates_last_command_and_response(monkeypatch):
     assert "heard" in events and "cleaned" in events
 
 
+def test_handle_conversation_text_uses_session_and_speaks_once(monkeypatch):
+    ctx = make_ctx()
+    ctl = AssistantController(ctx=ctx, skip_preload=True)
+    responses = []
+    ctl.set_callback("response", lambda text: responses.append(text))
+    monkeypatch.setattr(
+        "skills.chat.handle",
+        lambda intent, routed_ctx: "Which part needs attention?",
+    )
+
+    spoken = ctl.handle_conversation_text("The desktop assistant.", from_voice=True)
+
+    assert spoken == "Which part needs attention?"
+    assert responses == ["Which part needs attention?"]
+    assert ctx.speaker.spoken == ["Which part needs attention?"]
+    assert ctl.conversation.active is True
+    assert ctl.status_snapshot()["conversation_active"] is True
+
+
 def test_registry_command_is_spoken_once_by_controller():
     ctx = make_ctx()
     ctl = AssistantController(ctx=ctx, skip_preload=True)

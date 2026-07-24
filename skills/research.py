@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.parse import quote_plus, urljoin, urlparse, parse_qs, unquote
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, FeatureNotFound
 
 from config import Config
 from brain.prompts import (
@@ -27,6 +27,13 @@ from brain.prompts import (
 
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) JARVIS/1.0"}
 STAGES = ["TOPIC", "DISCUSS", "OUTLINE", "GATHER", "DRAFT", "DONE"]
+
+
+def _soup(markup, parser):
+    try:
+        return BeautifulSoup(markup, parser)
+    except FeatureNotFound:
+        return BeautifulSoup(markup, "html.parser")
 
 
 def clarify_research_topic(topic):
@@ -182,7 +189,7 @@ def ddg_search(query, limit=6):
         resp = requests.get(
             "https://html.duckduckgo.com/html/?q=" + quote_plus(query),
             headers=UA, timeout=15)
-        soup = BeautifulSoup(resp.text, "lxml")
+        soup = _soup(resp.text, "lxml")
         for a in soup.select("a.result__a"):
             href = a.get("href", "")
             title = a.get_text(" ", strip=True)
@@ -268,7 +275,7 @@ def _fetch_public_page_text(url, max_chars):
         response.raise_for_status()
         if "text" not in response.headers.get("Content-Type", "text"):
             return current, ""
-        soup = BeautifulSoup(response.text, "lxml")
+        soup = _soup(response.text, "lxml")
         for tag in soup([
             "script", "style", "noscript", "header", "footer", "nav",
             "aside", "form", "iframe",
@@ -315,7 +322,7 @@ def bing_search(query, limit=6):
             "https://www.bing.com/search?format=rss&q=" + quote_plus(query),
             headers=UA, timeout=15)
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.content, "xml")
+        soup = _soup(resp.content, "xml")
         for item in soup.find_all("item"):
             url = item.link.get_text(strip=True) if item.link else ""
             title = item.title.get_text(" ", strip=True) if item.title else url
@@ -335,7 +342,7 @@ def fetch_page_text(url, max_chars=3500):
         resp = requests.get(url, headers=UA, timeout=10, allow_redirects=True)
         if "text" not in resp.headers.get("Content-Type", "text"):
             return ""
-        soup = BeautifulSoup(resp.text, "lxml")
+        soup = _soup(resp.text, "lxml")
         for tag in soup(["script", "style", "noscript", "header", "footer",
                          "nav", "aside", "form", "iframe"]):
             tag.decompose()

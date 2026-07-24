@@ -13,7 +13,10 @@ from config import Config, valid_openrouter_key
 
 class LLM:
     def __init__(self, api_key=None, model=None, base_url=None):
-        self.api_key = (api_key if api_key is not None else Config.OPENROUTER_API_KEY).strip()
+        if api_key is None:
+            from core.secret_store import load_openrouter_key
+            api_key = load_openrouter_key() or Config.OPENROUTER_API_KEY
+        self.api_key = str(api_key).strip()
         self.model = (model or Config.OPENROUTER_MODEL).strip()
         self.base_url = (base_url or Config.OPENROUTER_BASE_URL).strip()
         self.last_error = ""
@@ -136,6 +139,23 @@ class LLM:
             elif "401" in msg:
                 msg = "401 - invalid API key (***)"
             return False, self.model, msg
+
+    def list_models(self):
+        """Return OpenRouter model ids available to the authenticated user."""
+        if not self.available:
+            raise ValueError("OPENROUTER_API_KEY not set")
+        import requests
+        base = self.base_url.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3]
+        response = requests.get(
+            f"{base}/api/v1/models" if not base.endswith("/api") else f"{base}/v1/models",
+            headers={"Authorization": f"Bearer {self.api_key}"}, timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        entries = payload.get("data", []) if isinstance(payload, dict) else []
+        return sorted({str(item.get("id") or "").strip() for item in entries if isinstance(item, dict) and item.get("id")})
 
     # ----------------------------------------------------------- streaming
     def stream(self, messages, temperature=0.7, max_tokens=2048):

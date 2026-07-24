@@ -428,13 +428,21 @@ class MainWindow(QWidget):
         previous_speaker = self._last_speaker_state
         speaker = str(snapshot.get("speaker_state", "unavailable"))
         self._last_speaker_state = speaker
-        if speaker == "speaking":
+        if snapshot.get("conversation_interrupted"):
+            self.dashboard.set_state("interrupted", "Conversation interrupted")
+        elif snapshot.get("waiting_for_reply"):
+            self.dashboard.set_state("conversation_listening", "Waiting for your reply")
+        elif snapshot.get("conversation_active") and snapshot.get("processing"):
+            self.dashboard.set_state("thinking", "Conversation active")
+        elif speaker == "speaking":
             self.dashboard.set_state("speaking", "Piper output active")
         elif previous_speaker == "speaking":
             if snapshot.get("recording"):
                 self.dashboard.set_state("recording", "Recording command")
             elif snapshot.get("processing"):
                 self.dashboard.set_state("processing", "Processing voice command")
+            elif snapshot.get("conversation_active"):
+                self.dashboard.set_state("conversation_listening", "Waiting for your reply")
             elif snapshot.get("microphone_active") and snapshot.get("wakeword_active"):
                 self.dashboard.set_state("listening_wake", "Waiting for Hey Jarvis")
             elif speaker == "error":

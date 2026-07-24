@@ -195,11 +195,13 @@ class VoicePanel(HudPanel):
         super().__init__("Voice Link", parent, compact=True)
         self.state_label = _value_label("Disconnected")
         self.device_label = _value_label("Unavailable")
+        self.conversation_label = _value_label("Wake word mode")
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         form.setSpacing(2)
         form.addRow("STATE", self.state_label)
         form.addRow("INPUT", self.device_label)
+        form.addRow("MODE", self.conversation_label)
         self.content.addLayout(form)
         self.waveform = WaveformWidget()
         self.content.addWidget(self.waveform)
@@ -208,13 +210,19 @@ class VoicePanel(HudPanel):
         if not isinstance(snapshot, dict):
             return
         if snapshot.get("microphone_active"):
-            state = "Listening"
+            state = "Waiting for reply" if snapshot.get("waiting_for_reply") else "Listening"
         elif snapshot.get("microphone_available"):
             state = "Ready"
         else:
             state = "Disconnected"
         self.state_label.setText(state)
         self.device_label.setText(snapshot.get("selected_microphone") or "Unavailable")
+        if snapshot.get("conversation_active"):
+            mode = str(snapshot.get("conversation_state") or "CONVERSATION").replace("_", " ").title()
+            turns = snapshot.get("conversation_turns", 0)
+            self.conversation_label.setText(f"Conversation active ({turns} turns) - {mode}")
+        else:
+            self.conversation_label.setText("Wake word mode")
         self.waveform.set_level(snapshot.get("input_level", 0.0))
 
 

@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from bs4 import BeautifulSoup as RealBeautifulSoup, FeatureNotFound
 
 from skills import research
 
@@ -113,3 +114,35 @@ def test_hermes_research_read_revalidates_redirect_destination(monkeypatch):
 
     with pytest.raises(ValueError, match="local|private|non-public"):
         research.read_source("https://example.test/redirect")
+
+
+def test_public_page_fetch_falls_back_when_lxml_parser_is_unavailable(monkeypatch):
+    class Response:
+        status_code = 200
+        headers = {"Content-Type": "text/html; charset=utf-8"}
+        text = (
+            "<html><body><script>ignore()</script>"
+            "<p>Public evidence about renewable energy adoption with enough "
+            "detail for the research extractor to keep the paragraph.</p>"
+            "</body></html>"
+        )
+
+        def raise_for_status(self):
+            return None
+
+    def fake_soup(markup, parser):
+        if parser == "lxml":
+            raise FeatureNotFound("lxml is not installed")
+        return RealBeautifulSoup(markup, parser)
+
+    monkeypatch.setattr(research, "_require_public_source_url", lambda url: url)
+    monkeypatch.setattr(research.requests, "get", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(research, "BeautifulSoup", fake_soup)
+
+    final_url, text = research._fetch_public_page_text(
+        "https://example.test/research", 1000,
+    )
+
+    assert final_url == "https://example.test/research"
+    assert "renewable energy adoption" in text
+    assert "ignore()" not in text

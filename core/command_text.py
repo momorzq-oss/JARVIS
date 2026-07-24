@@ -11,7 +11,13 @@ NOISE_PREFIXES = (
 
 
 def cleanup_command(text):
-    value = re.sub(r"\s+", " ", (text or "").strip())
+    value = str(text or "").strip()
+    # Native Windows pipelines can decode a UTF-8 BOM either correctly or as
+    # the three mojibake characters "ï»¿". Neither belongs to the command.
+    while value.startswith(("\ufeff", "\xef\xbb\xbf")):
+        value = value[1:] if value.startswith("\ufeff") else value[3:]
+        value = value.lstrip()
+    value = re.sub(r"\s+", " ", value)
     if not value:
         return ""
     changed = True

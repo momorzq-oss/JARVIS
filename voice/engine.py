@@ -20,6 +20,22 @@ import numpy as np
 from config import Config
 from voice import audio_log
 from voice.capture import AudioCaptureService, SAMPLE_RATE, CHUNK
+from core.conversation import (
+    CONVERSATION_LISTENING,
+    ENDING_CONVERSATION,
+    ERROR_RECOVERY,
+    EXECUTING_TOOL,
+    INTENT_CONVERSATION,
+    INTENT_CORRECTION,
+    INTENT_EXIT,
+    INTENT_FOLLOW_UP,
+    INTENT_QUESTION,
+    INTERRUPTED,
+    SLEEPING,
+    SPEAKING,
+    THINKING,
+    TRANSCRIBING,
+)
 
 # Original imports from main.py, uncommented.
 from main import YES_WORDS, NO_WORDS, CANCEL_WORDS
@@ -55,6 +71,7 @@ class VoiceEngine:
         self._diag = False
         self._last_score = 0.0
         self._wake_voice_hangover = 0
+        self._conversation_empty_transcriptions = 0
 
     # ------------------------------------------------------------ properties
     @property
@@ -293,11 +310,243 @@ class VoiceEngine:
         self._reset_wake_model()
         self._wake_event.clear()
         self._wake_session_active.clear()
+        manager = self._conversation_manager()
+        if manager is not None and not manager.active:
+            manager.set_state(SLEEPING)
+            self.state.update(**manager.snapshot(), waiting_for_reply=False)
         if not self._stop.is_set():
             self.controller._set_state(
                 "listening_wake", "Listening for Hey Jarvis"
             )
             self.state.update(wakeword_active=True)
+
+    def _conversation_manager(self):
+        return getattr(self.controller, "conversation", None)
+
+    def _conversation_settings(self):
+        manager = self._conversation_manager()
+        return getattr(manager, "settings", None)
+
+    def _conversation_enabled(self):
+        settings = self._conversation_settings()
+        return bool(
+            settings is not None
+            and settings.enabled
+            and settings.follow_up_listening
+        )
+
+    def _update_conversation_state(self, state, detail="", **extra):
+        manager = self._conversation_manager()
+        if manager is not None:
+            try:
+                manager.set_state(state)
+                self.state.update(**manager.snapshot())
+            except Exception:
+                pass
+        self.state.update(**extra)
+        if detail:
+            self.controller._set_state(str(state).lower(), detail)
+        self.controller._emit("voicestate", self.state.snapshot())
+        audio_log.log(f"Conversation state: {state} {detail}".strip())
+
+    def _wait_for_speech_idle(self, settings, allow_barge=False):
+        """Wait for TTS to finish; optionally stop playback when human speech starts."""
+        if not self._speech_active():
+            self._post_speech_delay(settings)
+            return False
+        self._update_conversation_state(SPEAKING, "Speaking")
+        if not allow_barge:
+            while self._speech_active() and not self._stop.is_set():
+                time.sleep(0.05)
+            self._post_speech_delay(settings)
+            return False
+
+        with self._queue_lock:
+            self._frame_queue = []
+        self.capture.subscribe(self._on_record_frame)
+        voiced_run = 0
+        try:
+            while self._speech_active() and not self._stop.is_set():
+                frame = self._next_frame(timeout=0.08)
+                if frame is None:
+                    continue
+                if self._frame_has_voice(frame, settings):
+                    voiced_run += 1
+                else:
+                    voiced_run = max(0, voiced_run - 1)
+                if voiced_run >= max(1, int(settings.speech_start_threshold)):
+                    self.speech.stop()
+                    manager = self._conversation_manager()
+                    if manager is not None:
+                        manager.mark_interrupted()
+                        self.state.update(**manager.snapshot())
+                    self._update_conversation_state(INTERRUPTED, "Interrupted")
+                    return True
+        finally:
+            self.capture.unsubscribe(self._on_record_frame)
+        self._post_speech_delay(settings)
+        return False
+
+    def _post_speech_delay(self, settings):
+        delay = getattr(settings, "post_speech_delay_seconds", 0.35) if settings else 0.35
+        deadline = time.monotonic() + max(0.0, float(delay))
+        while time.monotonic() < deadline and not self._stop.is_set():
+            time.sleep(0.03)
+
+    def _activate_conversation_after_turn(self, turn):
+        if not self._conversation_enabled() or self._stop.is_set():
+            return False
+        text = str((turn or {}).get("text") or "").strip()
+        spoken = str((turn or {}).get("spoken") or "").strip()
+        if not text:
+            return False
+        manager = self._conversation_manager()
+        if manager is None:
+            return False
+        manager.begin(user_text=text, current_task=text)
+        if spoken:
+            manager.record_assistant(spoken)
+        self._conversation_empty_transcriptions = 0
+        self.state.update(**manager.snapshot())
+        self.controller._emit("voicestate", self.state.snapshot())
+        audio_log.log("Conversation mode entered")
+        return True
+
+    def _record_wake_only_followup(self):
+        if not self._conversation_enabled() or self._stop.is_set():
+            return np.array([], dtype=np.int16)
+        settings = self._conversation_settings()
+        self.speech.speak("Yes?")
+        self._wait_for_speech_idle(settings, allow_barge=False)
+        if self._stop.is_set():
+            return np.array([], dtype=np.int16)
+        self._update_conversation_state(
+            CONVERSATION_LISTENING,
+            "Waiting for your first message",
+            wakeword_active=False,
+            waiting_for_reply=True,
+            recording=True,
+        )
+        audio = self._record_command(
+            max_seconds=settings.maximum_recording_seconds,
+            start_timeout=settings.first_silence_reminder_seconds,
+            silence_timeout=settings.silence_detection_seconds,
+            min_speech_seconds=settings.minimum_speech_seconds,
+            speech_start_threshold=settings.speech_start_threshold,
+            background_noise_threshold=settings.background_noise_threshold,
+            background_noise_filtering=settings.background_noise_filtering,
+        )
+        self.state.update(recording=False, waiting_for_reply=False)
+        return audio
+
+    def _run_conversation_loop(self):
+        manager = self._conversation_manager()
+        settings = self._conversation_settings()
+        if manager is None or settings is None or not manager.active:
+            return
+        reminders = 0
+        while manager.active and not self._stop.is_set():
+            allow_barge = bool(
+                settings.barge_in and not settings.echo_suppression
+            )
+            self._wait_for_speech_idle(settings, allow_barge=allow_barge)
+            if not manager.active or self._stop.is_set():
+                break
+            self._update_conversation_state(
+                CONVERSATION_LISTENING,
+                "Waiting for your reply",
+                wakeword_active=False,
+                waiting_for_reply=True,
+                recording=True,
+            )
+            wait_seconds = self._next_conversation_wait(settings, reminders)
+            audio = self._record_command(
+                max_seconds=settings.maximum_recording_seconds,
+                start_timeout=wait_seconds,
+                silence_timeout=settings.silence_detection_seconds,
+                min_speech_seconds=settings.minimum_speech_seconds,
+                speech_start_threshold=settings.speech_start_threshold,
+                background_noise_threshold=settings.background_noise_threshold,
+                background_noise_filtering=settings.background_noise_filtering,
+            )
+            self.state.update(recording=False, waiting_for_reply=False)
+            if self._stop.is_set() or not manager.active:
+                break
+            if audio.size == 0:
+                reminders = self._handle_conversation_silence(settings, reminders)
+                continue
+            reminders = 0
+            turn = self._do_transcription_and_route(audio, conversation_turn=True)
+            if not turn.get("text"):
+                if self._handle_empty_conversation_transcription():
+                    break
+                continue
+            if turn.get("exit"):
+                break
+            self._conversation_empty_transcriptions = 0
+
+    def _next_conversation_wait(self, settings, reminders):
+        now = time.time()
+        manager = self._conversation_manager()
+        last = manager.session.last_activity_time if manager is not None else now
+        elapsed = max(0.0, now - last)
+        timeout = max(1.0, settings.inactivity_timeout_seconds - elapsed)
+        if reminders <= 0:
+            target = max(1.0, settings.first_silence_reminder_seconds - elapsed)
+        elif reminders == 1:
+            target = max(1.0, settings.second_silence_reminder_seconds - elapsed)
+        else:
+            target = timeout
+        return min(timeout, target)
+
+    def _handle_conversation_silence(self, settings, reminders):
+        manager = self._conversation_manager()
+        now = time.time()
+        last = manager.session.last_activity_time if manager is not None else now
+        elapsed = max(0.0, now - last)
+        if elapsed >= settings.inactivity_timeout_seconds:
+            self._end_conversation("Okay. Say Jarvis when you need me.")
+            audio_log.log("Conversation inactivity timeout")
+            return reminders
+        if reminders <= 0 and elapsed >= settings.first_silence_reminder_seconds:
+            self.speech.speak("I'm listening.")
+            audio_log.log("Conversation first silence reminder")
+            return 1
+        if reminders == 1 and elapsed >= settings.second_silence_reminder_seconds:
+            self.speech.speak("Still here if you want to continue.")
+            audio_log.log("Conversation second silence reminder")
+            return 2
+        return reminders
+
+    def _handle_empty_conversation_transcription(self):
+        self._conversation_empty_transcriptions += 1
+        audio_log.log(
+            "Conversation empty transcription "
+            f"{self._conversation_empty_transcriptions}"
+        )
+        if self._conversation_empty_transcriptions >= 2:
+            self._end_conversation(
+                "I am having trouble hearing you clearly. Say Jarvis when you need me."
+            )
+            return True
+        self._update_conversation_state(ERROR_RECOVERY, "Empty transcription")
+        self.speech.speak("I did not catch that. Please say it again.")
+        return False
+
+    def _end_conversation(self, message):
+        manager = self._conversation_manager()
+        if manager is not None:
+            manager.end("exit")
+            self.state.update(**manager.snapshot())
+        self._update_conversation_state(
+            ENDING_CONVERSATION,
+            "Returning to wake word mode",
+            waiting_for_reply=False,
+            recording=False,
+        )
+        if message:
+            self.speech.speak(message)
+        audio_log.log("Conversation mode exited")
 
     def _run(self):
         """Main voice engine thread loop."""
@@ -323,19 +572,25 @@ class VoiceEngine:
                     continue
                 if audio.size == 0:
                     audio_log.log("Command recording timed out without speech")
-                    self.speech.speak("I didn't hear anything, sir.")
-                    continue
+                    audio = self._record_wake_only_followup()
+                    if audio.size == 0:
+                        self.speech.speak("I didn't hear anything, sir.")
+                        continue
 
                 self.state.update(recording=False)
                 self.controller._set_state("processing", "Processing command")
-                self._do_transcription_and_route(audio)
+                turn = self._do_transcription_and_route(audio)
+                if self._activate_conversation_after_turn(turn):
+                    self._run_conversation_loop()
             finally:
                 self._finish_voice_cycle()
 
-    def _do_transcription_and_route(self, audio):
+    def _do_transcription_and_route(self, audio, conversation_turn=False):
         if self._stop.is_set():
-            return
+            return {"text": "", "spoken": "", "exit": False}
         self.state.update(processing=True)
+        if conversation_turn:
+            self._update_conversation_state(TRANSCRIBING, "Transcribing")
         try:
             # ensure whisper model is loaded (it's preloaded, but just in case)
             self.controller.ctx.listener.preload()
@@ -348,9 +603,10 @@ class VoiceEngine:
         self.state.update(processing=False)
         audio_log.log(f"Transcription completed: {len(text)} characters")
         if not text:
-            self.speech.speak("I didn't catch that, sir.")
-            self.controller._set_state("listening_wake", "Listening for Hey Jarvis")
-            return
+            if not conversation_turn:
+                self.speech.speak("I didn't catch that, sir.")
+                self.controller._set_state("listening_wake", "Listening for Hey Jarvis")
+            return {"text": "", "spoken": "", "exit": False}
         
         # Re-enabled voice confirmation logic.
         gui_controller_instance = self.controller.ctx.gui_controller if hasattr(self.controller.ctx, 'gui_controller') else None
@@ -362,18 +618,25 @@ class VoiceEngine:
             if cleaned_text in YES_WORDS:
                 gui_controller_instance.resolve_confirmation("approve_once")
                 self.speech.speak("Confirmed, sir.")
-                return # Handled by voice confirmation
+                return {"text": text, "spoken": "Confirmed, sir.", "exit": False}
             elif cleaned_text in CANCEL_WORDS:
                 gui_controller_instance.resolve_confirmation("cancel_task")
                 self.speech.speak("Task cancelled, sir.")
-                return
+                return {"text": text, "spoken": "Task cancelled, sir.", "exit": False}
             elif cleaned_text in NO_WORDS:
                 gui_controller_instance.resolve_confirmation("deny")
                 self.speech.speak("Action cancelled, sir.")
-                return # Handled by voice confirmation
+                return {"text": text, "spoken": "Action cancelled, sir.", "exit": False}
             else:
                 self.speech.speak("Please say yes or no to confirm the action, or cancel to abort.")
-                return # Still waiting for confirmation
+                return {
+                    "text": text,
+                    "spoken": "Please say yes or no to confirm the action, or cancel to abort.",
+                    "exit": False,
+                }
+
+        if conversation_turn:
+            return self._route_conversation_text(text)
 
         # route command to controller (original logic)
         self.controller._emit("transcription", text)
@@ -388,9 +651,52 @@ class VoiceEngine:
         # twice, with the two Piper jobs overlapping.
         if not self._stop.is_set():
             self.controller._set_state("listening_wake", "Listening for Hey Jarvis")
+        return {"text": text, "spoken": spoken or "", "exit": False}
+
+    def _route_conversation_text(self, text):
+        manager = self._conversation_manager()
+        if manager is None:
+            spoken = self.controller.handle_text(text, from_voice=True)
+            return {"text": text, "spoken": spoken or "", "exit": False}
+        intent = manager.classify(text, self.controller.ctx)
+        self.controller._emit("timeline", "conversation_intent", intent.intent_type)
+        audio_log.log(f"Conversation intent: {intent.intent_type}")
+        if intent.intent_type == INTENT_EXIT:
+            self._end_conversation("Okay. Say Jarvis when you need me.")
+            return {"text": text, "spoken": "Okay. Say Jarvis when you need me.", "exit": True}
+        if intent.uses_tools or (intent.route or {}).get("route_type") == "pending":
+            self._update_conversation_state(EXECUTING_TOOL, "Executing task")
+            spoken = self.controller.handle_text(text, from_voice=True)
+            manager.record_user(text)
+            manager.record_tool_result(text, spoken or "")
+            if spoken:
+                manager.record_assistant(spoken)
+            self.state.update(**manager.snapshot())
+            return {"text": text, "spoken": spoken or "", "exit": False}
+        if intent.intent_type in {
+            INTENT_CONVERSATION,
+            INTENT_QUESTION,
+            INTENT_FOLLOW_UP,
+            INTENT_CORRECTION,
+        }:
+            self._update_conversation_state(THINKING, "Thinking")
+            spoken = self.controller.handle_conversation_text(text, from_voice=True)
+            return {"text": text, "spoken": spoken or "", "exit": False}
+        spoken = self.controller.handle_text(text, from_voice=True)
+        return {"text": text, "spoken": spoken or "", "exit": False}
 
     # ------------------------------------------------------------ recording
-    def _record_command(self, max_seconds=None):
+    def _record_command(
+        self,
+        max_seconds=None,
+        *,
+        start_timeout=5.0,
+        silence_timeout=None,
+        min_speech_seconds=None,
+        speech_start_threshold=None,
+        background_noise_threshold=0.0,
+        background_noise_filtering=False,
+    ):
         """Record a command from the shared stream using VAD on queue frames."""
         max_seconds = max_seconds or Config.LISTEN_MAX_SECONDS
         # clear stale frames and subscribe
@@ -402,50 +708,82 @@ class VoiceEngine:
             voiced_run = 0
             started = False
             silent_run = 0
-            waited = 0
-            start_timeout_frames = int(5.0 * 1000 / 30)
-            silence_frames = 26
-            max_frames = int(max_seconds * 1000 / 30)
-            count = 0
-            while count < max_frames and not self._stop.is_set():
+            speech_frames = 0
+            start_threshold = max(1, int(speech_start_threshold or 3))
+            silence_frames = max(1, int((silence_timeout or 1.4) * 1000 / 30))
+            min_frames = max(0, int((min_speech_seconds or 0.0) * 1000 / 30))
+            started_deadline = time.monotonic() + max(0.1, float(start_timeout))
+            deadline = time.monotonic() + max(0.1, float(max_seconds))
+            while time.monotonic() < deadline and not self._stop.is_set():
                 frame = self._next_frame(timeout=0.5)
                 if frame is None:
-                    if not started:
-                        waited += 16
-                        if waited > start_timeout_frames:
-                            return np.array([], dtype=np.int16)
+                    if not started and time.monotonic() >= started_deadline:
+                        return np.array([], dtype=np.int16)
                     continue
-                count += 1
                 # split CHUNK (1280) into 30ms VAD frames (480) - process subframes
                 for sub in self._subframes(frame):
                     pcm = sub.tobytes()
-                    try:
-                        voiced = self._listener._vad.is_speech(pcm, SAMPLE_RATE)
-                    except Exception:
-                        voiced = False
+                    voiced = self._subframe_has_voice(
+                        sub,
+                        background_noise_threshold=background_noise_threshold,
+                        background_noise_filtering=background_noise_filtering,
+                    )
                     if not started:
-                        waited += 1
                         if voiced:
                             voiced_run += 1
                         else:
                             voiced_run = max(0, voiced_run - 1)
-                        if voiced_run >= 3:
+                        if voiced_run >= start_threshold:
                             started = True
+                            speech_frames = 1
                             frames.append(pcm)
-                        elif waited > start_timeout_frames:
+                        elif time.monotonic() >= started_deadline:
                             return np.array([], dtype=np.int16)
                     else:
                         frames.append(pcm)
+                        speech_frames += 1
                         if voiced:
                             silent_run = 0
                         else:
                             silent_run += 1
                             if silent_run >= silence_frames:
+                                if speech_frames < min_frames:
+                                    return np.array([], dtype=np.int16)
                                 return np.frombuffer(b"".join(frames), dtype=np.int16)
-            return np.frombuffer(b"".join(frames), dtype=np.int16) if frames \
-                else np.array([], dtype=np.int16)
+            if frames and speech_frames >= min_frames:
+                return np.frombuffer(b"".join(frames), dtype=np.int16)
+            return np.array([], dtype=np.int16)
         finally:
             self.capture.unsubscribe(self._on_record_frame)
+
+    def _frame_has_voice(self, frame, settings):
+        return any(
+            self._subframe_has_voice(
+                sub,
+                background_noise_threshold=getattr(settings, "background_noise_threshold", 0.0),
+                background_noise_filtering=getattr(settings, "background_noise_filtering", False),
+            )
+            for sub in self._subframes(frame)
+        )
+
+    def _subframe_has_voice(
+        self,
+        subframe,
+        *,
+        background_noise_threshold=0.0,
+        background_noise_filtering=False,
+    ):
+        if background_noise_filtering:
+            try:
+                level = float(getattr(self.capture, "level", 0.0) or 0.0)
+                if level > 0.0 and level < float(background_noise_threshold or 0.0):
+                    return False
+            except Exception:
+                pass
+        try:
+            return bool(self._listener._vad.is_speech(subframe.tobytes(), SAMPLE_RATE))
+        except Exception:
+            return False
 
     def _on_record_frame(self, audio):
         with self._queue_lock:

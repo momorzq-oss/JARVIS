@@ -275,3 +275,68 @@ def test_hermes_settings_probe_runs_off_gui_thread(qapp, tmp_path, monkeypatch):
     assert dialog.btn_test_hermes.isEnabled()
     dialog.close()
     dialog.deleteLater()
+
+
+def test_openrouter_settings_populate_models_and_apply_connection(qapp, tmp_path, monkeypatch):
+    applied = []
+
+    class Controller:
+        ctx = type("Context", (), {"llm": type("LLM", (), {"available": False})()})()
+
+        def configure_openrouter(self, key, model):
+            applied.append((key, model))
+            return True, "OpenRouter settings applied."
+
+        def apply_settings(self):
+            return True
+
+    controller = Controller()
+    gui_controller = type("GuiController", (), {
+        "bridge": None, "controller": controller,
+        "apply_settings": lambda self: controller.apply_settings(),
+    })()
+    monkeypatch.setattr(SettingsWindow, "_populate_devices", lambda self: None)
+    dialog = SettingsWindow(SettingsStore(tmp_path / "settings.json"), gui_controller)
+    dialog._apply_openrouter_result({
+        "ok": True, "key": "sk-or-v1-test", "model": "beta/model",
+        "models": ["alpha/model", "beta/model"],
+    })
+
+    assert dialog.openrouter_model_combo.isEnabled()
+    assert dialog.openrouter_model_combo.currentText() == "beta/model"
+    assert dialog.btn_refresh_models.isEnabled()
+    assert applied == [("sk-or-v1-test", "beta/model")]
+    assert "2 models" in dialog.conn_result.text()
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_openrouter_model_loader_uses_connected_key_and_selected_model(qapp, tmp_path, monkeypatch):
+    class Controller:
+        ctx = type("Context", (), {
+            "llm": type("LLM", (), {"available": True, "api_key": "stored-key"})()
+        })()
+
+        def apply_settings(self):
+            return True
+
+    monkeypatch.setattr(SettingsWindow, "_populate_devices", lambda self: None)
+    dialog = SettingsWindow(SettingsStore(tmp_path / "settings.json"), Controller())
+    dialog.openrouter_model_combo.setEnabled(True)
+    dialog.openrouter_model_combo.addItem("saved/model")
+    dialog.openrouter_model_combo.setCurrentText("saved/model")
+    calls = []
+    monkeypatch.setattr(
+        dialog,
+        "_start_openrouter_request",
+        lambda key, model, **kwargs: calls.append((key, model, kwargs)),
+    )
+
+    dialog.openrouter_key.setText("")
+    dialog._on_load_openrouter_models()
+
+    assert calls == [("stored-key", "saved/model", {
+        "load_models": True, "test_connection": False,
+    })]
+    dialog.close()
+    dialog.deleteLater()

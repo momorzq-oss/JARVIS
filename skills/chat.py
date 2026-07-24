@@ -81,9 +81,38 @@ def chat(message, remember_fact, ctx):
 
     system = JARVIS_SYSTEM_PROMPT.format(
         address=Config.OWNER_ADDRESS, memory=_memory_block())
-    messages = [{"role": "system", "content": system}]
-    messages.extend(list(_history))
-    messages.append({"role": "user", "content": message})
+    conversation = getattr(ctx, "conversation", None)
+    session_messages = []
+    session_summary = ""
+    if conversation is not None and getattr(conversation, "active", False):
+        try:
+            session_messages, session_summary = conversation.messages_for_model()
+        except Exception:
+            session_messages, session_summary = [], ""
+
+    length_style = ""
+    try:
+        style = str(conversation.settings.response_length if conversation else "concise")
+    except Exception:
+        style = "concise"
+    if style == "concise":
+        length_style = " Keep spoken responses concise unless the user asks for detail."
+    elif style == "detailed":
+        length_style = " Give more detail when it genuinely helps."
+
+    messages = [{"role": "system", "content": system + length_style}]
+    if session_summary:
+        messages.append({"role": "system", "content": "Conversation summary: " + session_summary})
+    if session_messages:
+        messages.extend(session_messages)
+        if not (
+            session_messages[-1].get("role") == "user"
+            and session_messages[-1].get("content") == message
+        ):
+            messages.append({"role": "user", "content": message})
+    else:
+        messages.extend(list(_history))
+        messages.append({"role": "user", "content": message})
 
     reply = ctx.llm.chat(messages, temperature=0.75, max_tokens=450)
     if not reply:

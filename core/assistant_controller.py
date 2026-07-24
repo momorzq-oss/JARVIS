@@ -26,6 +26,7 @@ from core.action_manager import Action, ActionManager
 from core.capability_registry import CapabilityRegistry
 from core.unified_tool_catalog import UnifiedToolCatalog
 from core.unified_tool_router import UnifiedToolRouter
+from core.conversation import ConversationManager
 from brain.hermes_task_manager import HermesTaskManager
 from brain.hermes_orchestrator import HermesOrchestrator
 from brain.hermes_health import hermes_health
@@ -39,6 +40,11 @@ STATE_WAKE_DETECTED = "wake_detected"
 STATE_RECORDING = "recording"
 STATE_PROCESSING = "processing"
 STATE_SPEAKING = "speaking"
+STATE_THINKING = "thinking"
+STATE_CONVERSATION_LISTENING = "conversation_listening"
+STATE_EXECUTING_TOOL = "executing_tool"
+STATE_INTERRUPTED = "interrupted"
+STATE_ENDING_CONVERSATION = "ending_conversation"
 STATE_READY = "ready"
 STATE_ERROR = "error"
 
@@ -96,6 +102,8 @@ class AssistantController:
             self.hermes_tasks, self.capability_registry,
             event_callback=self._audit_hermes_event,
         )
+        self.conversation = ConversationManager()
+        self.ctx.conversation = self.conversation
         self._hermes_pending_plans = {}
         self.account_connections = AccountConnectionManager(self.ctx)
         live_task = getattr(self.ctx, "live_task", None)
@@ -195,8 +203,29 @@ class AssistantController:
             self.hermes_adapter.configure(
                 enabled=False, mode="disabled", provider="", model="",
             )
+        try:
+            self.conversation.configure(self._settings)
+            self.state.update(**self.conversation.snapshot())
+        except Exception as exc:
+            audio_log.log_error(f"Unable to apply conversation settings: {exc}", exc)
         self._emit("status", self.status_snapshot())
         return audio_applied
+
+    def configure_openrouter(self, api_key, model):
+        """Apply a user-owned OpenRouter credential/model to this live session."""
+        key = str(api_key or "").strip()
+        selected_model = str(model or Config.OPENROUTER_MODEL).strip()
+        if key:
+            from core.secret_store import save_openrouter_key
+            if not save_openrouter_key(key):
+                return False, "JARVIS could not secure the key in the Windows credential vault."
+            Config.OPENROUTER_API_KEY = key
+            self.ctx.llm.api_key = key
+        Config.OPENROUTER_MODEL = selected_model
+        self.ctx.llm.model = selected_model
+        self.ctx.llm._client = None
+        self._emit("status", self.status_snapshot())
+        return True, "OpenRouter settings applied."
 
     def _saved_mic(self):
         if self._settings is None:
@@ -226,6 +255,7 @@ class AssistantController:
             snap["last_command"] = self._last_command
             snap["last_response"] = self._last_response
             snap["current_task"] = self._current_task
+            snap.update(self.conversation.snapshot())
             context_state = getattr(self.ctx, "state", {})
             assignment_state = (
                 context_state.get("university_assignment")
@@ -321,6 +351,53 @@ class AssistantController:
             except Exception as exc:
                 snap["system_metrics"] = {"status": "DEGRADED", "detail": str(exc)}
         return snap
+
+    def handle_conversation_text(self, text, from_voice=False):
+        """Handle a human conversation turn without forcing command routing."""
+        try:
+            from core.command_text import cleanup_command
+            cleaned = cleanup_command(text)
+        except Exception:
+            cleaned = str(text or "").strip()
+        if not cleaned:
+            return None
+        if isinstance(getattr(self.ctx, "state", None), dict):
+            self.ctx.state["input_source"] = "voice" if from_voice else "typed"
+        with self._lock:
+            self._last_command = cleaned
+            self._current_task = cleaned
+        self.conversation.begin(user_text=cleaned, current_task=self._current_task)
+        self.conversation.set_state("THINKING")
+        self.state.update(**self.conversation.snapshot())
+        self._set_state(STATE_THINKING, "Thinking about your reply")
+        self._emit("timeline", "heard", text)
+        self._emit("timeline", "conversation_intent", "conversation")
+        self._emit("transcription", cleaned)
+        try:
+            from skills import chat
+            spoken = chat.handle(
+                {"skill": "chat", "params": {"message": cleaned}},
+                self.ctx,
+            )
+        except Exception as exc:
+            audio_log.log_error("Conversation response failed", exc)
+            spoken = "I did not catch that. Please say it again."
+            self.conversation.set_state("ERROR_RECOVERY")
+            self._set_state(STATE_ERROR, str(exc))
+        if spoken:
+            self.conversation.record_assistant(spoken)
+            with self._lock:
+                self._last_response = spoken
+            self._emit("response", spoken)
+            self._emit("timeline", "completed", spoken[:120])
+            self.speak(spoken)
+        with self._lock:
+            self._current_task = ""
+        self.conversation.set_state("CONVERSATION_LISTENING")
+        self.state.update(**self.conversation.snapshot())
+        self._emit("voicestate", self.state.snapshot())
+        self._emit("status", self.status_snapshot())
+        return spoken
 
     def _browser_open(self):
         try:

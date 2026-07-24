@@ -18,7 +18,8 @@ def test_voicestate_snapshot_has_all_keys():
     for key in ("microphone_available", "microphone_active", "selected_microphone",
                 "speaker_available", "speaker_engine", "speaker_state",
                 "wakeword_loaded", "wakeword_active", "whisper_loaded",
-                "recording", "processing", "last_audio_error"):
+                "recording", "processing", "conversation_active",
+                "conversation_state", "waiting_for_reply", "last_audio_error"):
         assert key in snap
 
 
@@ -450,6 +451,230 @@ def test_voice_engine_does_not_repeat_controller_response():
     engine._do_transcription_and_route(np.zeros(1280, dtype=np.int16))
 
     assert spoken == []
+
+
+def test_conversation_exit_phrase_returns_to_wake_mode():
+    from core.conversation import ConversationManager
+
+    state = VoiceState()
+    spoken = []
+    manager = ConversationManager()
+    manager.begin(user_text="I want to talk.")
+    listener = type("Listener", (), {"preload": lambda self: None})()
+    controller = type(
+        "Controller",
+        (),
+        {
+            "ctx": type("Context", (), {"listener": listener, "pending": None, "state": {}})(),
+            "conversation": manager,
+            "_set_state": lambda self, *args: None,
+            "_emit": lambda self, *args: None,
+        },
+    )()
+    speech = type(
+        "Speech",
+        (),
+        {
+            "speaking": False,
+            "speak": lambda self, text: spoken.append(text),
+            "stop": lambda self: None,
+        },
+    )()
+    engine = VoiceEngine(controller, state, speech)
+    engine._listener = type(
+        "Transcriber",
+        (),
+        {"transcribe": lambda self, audio: "Goodbye Jarvis"},
+    )()
+
+    turn = engine._do_transcription_and_route(
+        np.zeros(1280, dtype=np.int16), conversation_turn=True,
+    )
+
+    assert turn["exit"] is True
+    assert manager.active is False
+    assert spoken == ["Okay. Say Jarvis when you need me."]
+
+
+def test_wake_only_activation_prompts_and_records_first_message(monkeypatch):
+    from core.conversation import ConversationManager
+
+    state = VoiceState()
+    spoken = []
+    manager = ConversationManager()
+    controller = type(
+        "Controller",
+        (),
+        {
+            "ctx": type("Context", (), {"listener": None})(),
+            "conversation": manager,
+            "_set_state": lambda self, *args: None,
+            "_emit": lambda self, *args: None,
+        },
+    )()
+    speech = type(
+        "Speech",
+        (),
+        {
+            "speaking": False,
+            "speak": lambda self, text: spoken.append(text),
+            "stop": lambda self: None,
+        },
+    )()
+    engine = VoiceEngine(controller, state, speech)
+    recorded = np.ones(480, dtype=np.int16)
+    monkeypatch.setattr(engine, "_record_command", lambda **_kwargs: recorded)
+
+    audio = engine._record_wake_only_followup()
+
+    assert audio is recorded
+    assert spoken == ["Yes?"]
+    assert state.snapshot()["waiting_for_reply"] is False
+
+
+def test_echo_suppression_blocks_barge_in_microphone_capture(monkeypatch):
+    from core.conversation import ConversationManager, ConversationSettings
+
+    state = VoiceState()
+    manager = ConversationManager(ConversationSettings(barge_in=True, echo_suppression=True))
+    manager.begin(user_text="hello")
+    captured = []
+    controller = type(
+        "Controller",
+        (),
+        {
+            "ctx": type("Context", (), {"listener": None})(),
+            "conversation": manager,
+            "_set_state": lambda self, *args: None,
+            "_emit": lambda self, *args: None,
+        },
+    )()
+    speech = type("Speech", (), {"speaking": False})()
+    engine = VoiceEngine(controller, state, speech)
+
+    def wait(settings, allow_barge=False):
+        captured.append(allow_barge)
+        manager.end("test")
+
+    monkeypatch.setattr(engine, "_wait_for_speech_idle", wait)
+    engine._run_conversation_loop()
+
+    assert captured == [False]
+
+
+def test_empty_conversation_transcriptions_do_not_loop_forever():
+    from core.conversation import ConversationManager
+
+    state = VoiceState()
+    spoken = []
+    manager = ConversationManager()
+    manager.begin(user_text="hello")
+    controller = type(
+        "Controller",
+        (),
+        {
+            "ctx": type("Context", (), {"listener": None})(),
+            "conversation": manager,
+            "_set_state": lambda self, *args: None,
+            "_emit": lambda self, *args: None,
+        },
+    )()
+    speech = type(
+        "Speech",
+        (),
+        {"speaking": False, "speak": lambda self, text: spoken.append(text)},
+    )()
+    engine = VoiceEngine(controller, state, speech)
+
+    assert engine._handle_empty_conversation_transcription() is False
+    assert engine._handle_empty_conversation_transcription() is True
+
+    assert manager.active is False
+    assert spoken == [
+        "I did not catch that. Please say it again.",
+        "I am having trouble hearing you clearly. Say Jarvis when you need me.",
+    ]
+
+
+def test_configurable_recording_ignores_short_background_sound(monkeypatch):
+    state = VoiceState()
+    speech = type("Speech", (), {"speaking": False})()
+    controller = type(
+        "Controller",
+        (),
+        {
+            "ctx": type("Context", (), {"listener": None})(),
+            "_set_state": lambda self, *args: None,
+            "_emit": lambda self, *args: None,
+        },
+    )()
+    engine = VoiceEngine(controller, state, speech)
+    frame = np.ones(480, dtype=np.int16)
+    frames = [frame, frame, frame, frame]
+
+    class Vad:
+        values = iter([True, True, False, False])
+
+        def is_speech(self, *_args):
+            return next(self.values, False)
+
+    engine._listener = type("Listener", (), {"_vad": Vad()})()
+    monkeypatch.setattr(engine.capture, "subscribe", lambda _fn: None)
+    monkeypatch.setattr(engine.capture, "unsubscribe", lambda _fn: None)
+    monkeypatch.setattr(engine, "_next_frame", lambda timeout=0.5: frames.pop(0) if frames else None)
+
+    audio = engine._record_command(
+        max_seconds=0.5,
+        start_timeout=0.1,
+        speech_start_threshold=3,
+        silence_timeout=0.2,
+        min_speech_seconds=0.2,
+    )
+
+    assert audio.size == 0
+
+
+def test_configurable_recording_allows_sentence_pause(monkeypatch):
+    state = VoiceState()
+    speech = type("Speech", (), {"speaking": False})()
+    controller = type(
+        "Controller",
+        (),
+        {
+            "ctx": type("Context", (), {"listener": None})(),
+            "_set_state": lambda self, *args: None,
+            "_emit": lambda self, *args: None,
+        },
+    )()
+    engine = VoiceEngine(controller, state, speech)
+    frame = np.ones(480, dtype=np.int16)
+    frames = [frame for _ in range(12)]
+
+    class Vad:
+        values = iter([
+            True, True, True,
+            False, False,
+            True, True,
+            False, False, False, False, False,
+        ])
+
+        def is_speech(self, *_args):
+            return next(self.values, False)
+
+    engine._listener = type("Listener", (), {"_vad": Vad()})()
+    monkeypatch.setattr(engine.capture, "subscribe", lambda _fn: None)
+    monkeypatch.setattr(engine.capture, "unsubscribe", lambda _fn: None)
+    monkeypatch.setattr(engine, "_next_frame", lambda timeout=0.5: frames.pop(0) if frames else None)
+
+    audio = engine._record_command(
+        max_seconds=2.0,
+        start_timeout=0.5,
+        speech_start_threshold=2,
+        silence_timeout=0.12,
+        min_speech_seconds=0.05,
+    )
+
+    assert audio.size > 0
 
 
 def test_wake_detection_is_deduplicated_for_active_session():

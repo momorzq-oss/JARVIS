@@ -3,7 +3,7 @@ Settings window - edits %LOCALAPPDATA%\\JARVIS\\config.json.
 
 Real audio device dropdowns (input + output), Refresh, live Test Microphone
 (3 s recording + input-level meter + non-silence check) and Test Speaker
-(Piper). The OpenRouter API key is never shown or stored here.
+(Piper). OpenRouter secrets are protected with the current user's Windows DPAPI.
 """
 import numpy as np
 import threading
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 class SettingsWindow(QDialog):
     hermes_probe_completed = Signal(object)
+    openrouter_completed = Signal(object)
 
     def __init__(self, settings_store, gui_controller=None, parent=None):
         super().__init__(parent)
@@ -30,7 +31,9 @@ class SettingsWindow(QDialog):
         self._test_frames = []
         self._test_timer = None
         self._hermes_probe_running = False
+        self._openrouter_request_running = False
         self.hermes_probe_completed.connect(self._apply_hermes_probe)
+        self.openrouter_completed.connect(self._apply_openrouter_result)
         self._build()
         self._load()
         self._populate_devices()
@@ -52,7 +55,7 @@ class SettingsWindow(QDialog):
         if bridge is not None and hasattr(bridge, "hermes_configuration_changed"):
             bridge.hermes_configuration_changed.connect(self._on_hermes_configuration)
 
-        note = QLabel("The OpenRouter API key is kept in the environment and is never shown here.")
+        note = QLabel("OpenRouter keys are protected for this Windows user and are never written to config.json.")
         note.setObjectName("statusLabel")
         note.setWordWrap(True)
         root.addWidget(note)
@@ -106,7 +109,33 @@ class SettingsWindow(QDialog):
     def _assistant_tab(self):
         w = QWidget()
         form = QFormLayout(w)
-        self._add_line(form, "openrouter_model", "OpenRouter model")
+        privacy = QLabel(
+            "Connect your own OpenRouter account to use its available models. "
+            "Your key is masked and stored only in the local Windows credential vault."
+        )
+        privacy.setObjectName("statusLabel")
+        privacy.setWordWrap(True)
+        form.addRow(privacy)
+        self.openrouter_key = QLineEdit()
+        self.openrouter_key.setEchoMode(QLineEdit.Password)
+        self.openrouter_key.setPlaceholderText("sk-or-v1-…")
+        form.addRow(QLabel("OpenRouter API key"), self.openrouter_key)
+        self.btn_connect_openrouter = QPushButton("Connect OpenRouter")
+        self.btn_connect_openrouter.clicked.connect(self._on_connect_openrouter)
+        form.addRow(self.btn_connect_openrouter)
+        self.openrouter_model_combo = QComboBox()
+        self.openrouter_model_combo.setEditable(True)
+        self.openrouter_model_combo.setEnabled(False)
+        form.addRow(QLabel("OpenRouter model"), self.openrouter_model_combo)
+        self._widgets["openrouter_model"] = ("combo", self.openrouter_model_combo)
+        self.btn_refresh_models = QPushButton("Load available models")
+        self.btn_refresh_models.clicked.connect(self._on_load_openrouter_models)
+        self.btn_refresh_models.setEnabled(False)
+        form.addRow(self.btn_refresh_models)
+        self.conn_result = QLabel("Connect an OpenRouter key to load models.")
+        self.conn_result.setObjectName("statusLabel")
+        self.conn_result.setWordWrap(True)
+        form.addRow(self.conn_result)
         self._add_combo(form, "browser_preference", "Browser preference",
                         ["edge", "chrome", "chromium"])
         self._add_combo(form, "theme", "Theme", ["cinematic"])
@@ -117,14 +146,39 @@ class SettingsWindow(QDialog):
                         ["ask", "research_folder"])
         self._add_combo(form, "confirmation_policy", "Confirmation policy",
                         ["risk_based", "always_confirm"])
-        # Test Connection button
-        self.btn_test_conn = QPushButton("Test Connection")
-        self.btn_test_conn.clicked.connect(self._on_test_connection)
-        form.addRow(self.btn_test_conn)
-        self.conn_result = QLabel("")
-        self.conn_result.setObjectName("statusLabel")
-        self.conn_result.setWordWrap(True)
-        form.addRow(self.conn_result)
+        self._add_check(form, "conversation_mode_enabled", "Enable human conversation mode")
+        self._add_check(form, "followup_listening_enabled", "Enable follow-up listening")
+        self._add_check(form, "barge_in_enabled", "Enable barge-in interruption")
+        self._add_spin(form, "silence_reminder_seconds", "First silence reminder (seconds)",
+                       1.0, 120.0, 1.0)
+        self._add_spin(form, "second_silence_reminder_seconds", "Second silence reminder (seconds)",
+                       2.0, 180.0, 1.0)
+        self._add_spin(form, "conversation_inactivity_timeout_seconds",
+                       "Conversation inactivity timeout (seconds)", 5.0, 600.0, 5.0)
+        self._add_spin(form, "silence_detection_seconds", "Silence detection duration (seconds)",
+                       0.3, 5.0, 0.1)
+        self._add_spin(form, "speech_start_threshold", "Speech start threshold (VAD frames)",
+                       1.0, 12.0, 1.0)
+        self._add_spin(form, "minimum_speech_seconds", "Minimum speech duration (seconds)",
+                       0.0, 5.0, 0.05)
+        self._add_spin(form, "maximum_recording_seconds", "Maximum recording duration (seconds)",
+                       3.0, 300.0, 1.0)
+        self._add_spin(form, "post_speech_listening_delay_seconds",
+                       "Post-speech listening delay (seconds)", 0.0, 5.0, 0.05)
+        self._add_spin(form, "background_noise_threshold", "Background noise threshold",
+                       0.0, 1.0, 0.005)
+        self._add_combo(form, "conversation_response_length", "Conversation response length",
+                        ["concise", "normal", "detailed"])
+        self._add_spin(form, "conversation_memory_limit", "Conversation memory limit (turns)",
+                       4.0, 100.0, 1.0)
+        self._add_check(form, "return_to_wake_after_inactivity",
+                        "Return to wake word after inactivity")
+        self._add_line(form, "conversation_exit_phrases", "Exit phrases")
+        self._add_spin(form, "microphone_sensitivity", "Microphone sensitivity",
+                       0.1, 5.0, 0.1)
+        self._add_check(form, "echo_suppression_enabled", "Echo suppression")
+        self._add_check(form, "background_noise_filtering_enabled",
+                        "Background noise filtering")
         return w
 
     def _accounts_tab(self):
@@ -452,22 +506,88 @@ class SettingsWindow(QDialog):
         self.mic_result.setText("Speaking test through Piper...")
         self.gc.speak("JARVIS speaker test. Piper is online, sir.")
 
-    # ---- test OpenRouter connection -------------------------------------------
-    def _on_test_connection(self):
-        self.conn_result.setText("Testing...")
-        ok = False
-        model = ""
-        detail = ""
-        try:
-            from brain.llm import LLM
-            llm = LLM()
-            ok, model, detail = llm.test_connection()
-        except Exception as exc:
-            detail = str(exc)
-        if ok:
-            self.conn_result.setText(f"Connected - {model}: {detail}")
+    # ---- OpenRouter connection and model discovery ---------------------------
+    def _on_connect_openrouter(self):
+        key = self.openrouter_key.text().strip()
+        if not key:
+            self.conn_result.setText("Enter an OpenRouter API key first.")
+            return
+        model = self.openrouter_model_combo.currentText().strip()
+        self._start_openrouter_request(key, model, load_models=True)
+
+    def _on_load_openrouter_models(self):
+        key = self.openrouter_key.text().strip()
+        if not key and self.gc is not None:
+            controller = getattr(self.gc, "controller", self.gc)
+            context = getattr(controller, "ctx", None)
+            key = str(getattr(getattr(context, "llm", None), "api_key", "") or "")
+        if not key:
+            self.conn_result.setText("Connect an OpenRouter API key before loading models.")
+            return
+        model = self.openrouter_model_combo.currentText().strip()
+        self._start_openrouter_request(key, model, load_models=True, test_connection=False)
+
+    def _start_openrouter_request(self, key, model, *, load_models, test_connection=True):
+        if self._openrouter_request_running:
+            return
+        self._openrouter_request_running = True
+        self.btn_connect_openrouter.setEnabled(False)
+        self.btn_refresh_models.setEnabled(False)
+        self.conn_result.setText("Connecting to OpenRouter…" if test_connection else "Loading available models…")
+
+        def work():
+            result = {"key": key, "ok": False, "models": []}
+            try:
+                from brain.llm import LLM
+                llm = LLM(api_key=key, model=model)
+                if test_connection:
+                    result["ok"], result["model"], result["detail"] = llm.test_connection()
+                    if not result["ok"]:
+                        self.openrouter_completed.emit(result)
+                        return
+                else:
+                    result.update(ok=True, model=llm.model, detail="Connected")
+                if load_models:
+                    result["models"] = llm.list_models()
+            except Exception as exc:
+                result["detail"] = str(exc)
+            self.openrouter_completed.emit(result)
+
+        threading.Thread(target=work, name="JARVIS-OpenRouter-Settings", daemon=True).start()
+
+    def _apply_openrouter_result(self, result):
+        self._openrouter_request_running = False
+        self.btn_connect_openrouter.setEnabled(True)
+        result = result if isinstance(result, dict) else {}
+        if not result.get("ok"):
+            self.conn_result.setText(f"Connection failed: {result.get('detail', 'unknown error')}")
+            return
+        key = str(result.get("key") or "")
+        model = str(result.get("model") or self.openrouter_model_combo.currentText() or "")
+        controller = getattr(self.gc, "controller", self.gc)
+        if controller is not None and hasattr(controller, "configure_openrouter"):
+            saved, detail = controller.configure_openrouter(key, model)
+            if not saved:
+                self.conn_result.setText(detail)
+                return
         else:
-            self.conn_result.setText(f"Failed - {model}: {detail}")
+            from core.secret_store import save_openrouter_key
+            if not save_openrouter_key(key):
+                self.conn_result.setText("Could not secure the key in the Windows credential vault.")
+                return
+        models = result.get("models") or []
+        if models:
+            current = model
+            self.openrouter_model_combo.blockSignals(True)
+            self.openrouter_model_combo.clear()
+            self.openrouter_model_combo.addItems(models)
+            self.openrouter_model_combo.setCurrentText(current if current in models else models[0])
+            self.openrouter_model_combo.blockSignals(False)
+            self.conn_result.setText(f"Connected. {len(models)} models are available.")
+        else:
+            self.conn_result.setText("Connected. No model list was returned; enter a model id manually.")
+        self.openrouter_model_combo.setEnabled(True)
+        self.btn_refresh_models.setEnabled(True)
 
     # ---- load/save -----------------------------------------------------------
     def _load(self):
@@ -490,6 +610,14 @@ class SettingsWindow(QDialog):
         # restore saved device selections
         self._restore_combo(self.mic_combo, data.get("microphone_device"))
         self._restore_combo(self.spk_combo, data.get("speaker_device"))
+        selected = str(data.get("openrouter_model") or "")
+        if selected:
+            self.openrouter_model_combo.addItem(selected)
+            self.openrouter_model_combo.setCurrentText(selected)
+        controller = getattr(self.gc, "controller", self.gc)
+        context = getattr(controller, "ctx", None)
+        if getattr(getattr(context, "llm", None), "available", False):
+            self.btn_refresh_models.setEnabled(True)
 
     def _restore_combo(self, combo, saved):
         if saved in (None, "", "default"):
@@ -517,6 +645,9 @@ class SettingsWindow(QDialog):
             else:
                 mapping[key] = w.text()
         self.store.update(mapping)
+        controller = getattr(self.gc, "controller", self.gc)
+        if controller is not None and hasattr(controller, "configure_openrouter"):
+            controller.configure_openrouter("", mapping.get("openrouter_model", ""))
         if self.gc is not None and hasattr(self.gc, "apply_settings"):
             self.gc.apply_settings()
         self.accept()

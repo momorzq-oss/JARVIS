@@ -49,3 +49,20 @@ def test_general_conversation_remembers_the_turn_for_follow_up_context():
 
     assert {"role": "user", "content": "I want to discuss a new project."} in llm.messages
     assert {"role": "assistant", "content": "A considered reply, sir."} in llm.messages
+
+
+def test_active_human_conversation_uses_session_history_for_followups():
+    from core.conversation import ConversationManager
+
+    llm = _OnlineLLM()
+    ctx = _Context(llm)
+    ctx.conversation = ConversationManager()
+    ctx.conversation.begin(user_text="I am working on the voice system.")
+    ctx.conversation.record_assistant("What problem are you having with it?")
+    ctx.conversation.record_user("It stops listening after one reply.")
+
+    chat.chat("What should I inspect?", "", ctx)
+
+    assert {"role": "user", "content": "I am working on the voice system."} in llm.messages
+    assert {"role": "assistant", "content": "What problem are you having with it?"} in llm.messages
+    assert {"role": "user", "content": "It stops listening after one reply."} in llm.messages
